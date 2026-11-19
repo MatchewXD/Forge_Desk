@@ -156,6 +156,13 @@ export class TaskRepository {
     return rows.map(toTask)
   }
 
+  /** One item with rolled-up progress, its ancestors (root first) and its full subtree. */
+  getTaskDetail(id: number): { task: TaskNode; ancestors: Task[] } {
+    const [node] = this.getTree(id)
+    if (!node) throw new TaskError(`Task ${id} not found`)
+    return { task: node, ancestors: this.getAncestors(id) }
+  }
+
   /** Overdue, due today, and due in the next `days` days. Done items are excluded. */
   getToday(today: string = toLocalDateString(), days = 7): TodayView {
     const horizon = addDays(today, days)

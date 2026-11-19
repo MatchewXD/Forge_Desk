@@ -15,5 +15,5 @@
     "verbatimModuleSyntax": false,
     "noUnusedLocals": true
   },
-  "include": ["electron.vite.config.ts", "src/main/**/*", "src/preload/**/*", "src/shared/**/*", "scripts/**/*"]
+  "include": ["electron.vite.config.ts", "src/main/**/*", "src/preload/**/*", "src/shared/**/*", "src/mcp/**/*", "scripts/**/*"]
 }

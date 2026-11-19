@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "forge-desk": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "E:/Coding/Forge_Desk/src/mcp/server.ts"
+      ],
+      "env": {}
+    }
+  }
+}

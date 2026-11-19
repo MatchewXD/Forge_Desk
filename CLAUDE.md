@@ -15,6 +15,8 @@ A personal Windows desktop app for managing all of my projects in one place: lon
 - `npm run build` — production bundle into `out/`
 - `npm run typecheck` — type-check main/preload/shared and renderer
 - `npm run test:db` — smoke-test the shared DB layer in plain Node against a temp database
+- `npm run test:mcp` — end-to-end test of the MCP server over stdio (spawns it, calls every tool) against a temp database
+- `npm run mcp` — run the MCP server on stdio (normally launched by Claude, not by hand)
 
 ## Layout
 
@@ -27,6 +29,7 @@ src/
     connection.ts   openDatabase(), defaultDbPath() (WAL + busy_timeout for multi-process use)
     repository.ts   TaskRepository: all reads/writes and business rules
     index.ts        Public entry point (Node-only: pulls in node:sqlite)
+  mcp/server.ts     MCP server (stdio). Seven tools, each a thin wrapper over TaskRepository
   main/             Electron main process: window, IPC handlers -> TaskRepository, external-change watcher
   preload/          contextBridge exposing a typed `window.forge` API
   renderer/         React UI (sidebar, Tasks tree, Today screen, detail panel)
@@ -61,29 +64,38 @@ Every item has: `title`, `description`, `status` (`todo` / `in_progress` / `bloc
 
 ## Roadmap
 
-### Phase 1 — Task hierarchy + Today screen (current)
+### Phase 1 — Task hierarchy + Today screen (done)
 - Dark-themed app shell with sidebar navigation
 - Nested Vision → Project → Milestone → Task → Micro-task hierarchy with title, description, status, deadline, priority
 - Collapsible tree view with progress bars rolled up from children; create / edit / move / delete / complete
 - Today screen: overdue, due today, and next 7 days (excluding done items)
 
-### Phase 1.5 — MCP server (planned)
-A stdio MCP server (`src/mcp/server.ts`, using `@modelcontextprotocol/sdk`) so Claude can manage the task board. It imports `src/shared/db` and opens the **same SQLite file** as the app.
+### Phase 1.5 — MCP server (done)
+A stdio MCP server (`src/mcp/server.ts`, `@modelcontextprotocol/sdk` + `zod`) so Claude can manage the task board. It imports `src/shared/db` and opens the **same SQLite file** as the app (`%APPDATA%\ForgeDesk\forge-desk.db`, or `FORGE_DESK_DB`).
 
-Tools (thin wrappers over `TaskRepository` — no logic of their own):
-- `list_tasks` — filter by parent, level, status, due-before; optionally return the tree with progress
-- `get_task` — one item plus its ancestor path and children
-- `create_task` — title, level, parent_id, description, status, deadline, priority
-- `update_task` — patch any editable field
-- `move_task` — new parent and/or position (validated against level rules)
-- `complete_task` — mark done, optionally cascade to descendants
-- `get_today` — overdue / due today / next 7 days (same query as the Today screen)
+Tools (thin wrappers over `TaskRepository` — no logic of their own; tool args are snake_case):
+- `list_tasks` — flat list filtered by parent_id / level / status / due_before / include_done, or `tree: true` (optionally `root_id`) for the nested tree with progress
+- `get_task` — one item with progress, its ancestors and its subtree (`repo.getTaskDetail`)
+- `create_task` — title, parent_id, level, description, status, deadline, priority
+- `update_task` — patch title / description / status / deadline / priority
+- `move_task` — new_parent_id and/or index (validated against level rules)
+- `complete_task` — mark done, optionally `cascade` to descendants
+- `get_today` — overdue / due today / next N days (same query as the Today screen)
 
-Design notes already in place for this:
-- DB opened in WAL mode with `busy_timeout`, so the app and MCP server can write concurrently.
-- The app's main process polls `PRAGMA data_version` and pushes a `db:changed` event to the renderer, so edits made by Claude appear live.
-- `node:sqlite` means the server needs no native build; it can run under plain Node or via Electron with `ELECTRON_RUN_AS_NODE=1`.
-- Remaining work: add the SDK dependency, bundle `src/mcp/server.ts` to `out/mcp/server.js`, add an `npm run mcp` script, and document the Claude Desktop / Claude Code config (`command`, `args`, `env.FORGE_DESK_DB`).
+How it fits together:
+- Runs as TypeScript directly (`node src/mcp/server.ts`, Node >= 22.18 type stripping) — no build step. `src/mcp/package.json` marks it ESM.
+- stdout is the MCP channel: the server must only log to **stderr**.
+- DB is in WAL mode with `busy_timeout`, so the app and the server can write concurrently. The app polls `PRAGMA data_version` and refreshes when the server writes, so Claude's edits show up live.
+- New tool? Put the logic in `TaskRepository` first, then add a wrapper here, and cover it in `scripts/mcp-smoke.ts`.
+
+Registration:
+- Claude Code: project-scoped in `.mcp.json` (`claude mcp add --scope project forge-desk -- node E:/Coding/Forge_Desk/src/mcp/server.ts`).
+- Claude Desktop: add to `%APPDATA%\Claude\claude_desktop_config.json`:
+  ```json
+  { "mcpServers": { "forge-desk": {
+      "command": "C:\\Program Files\\nodejs\\node.exe",
+      "args": ["E:\\Coding\\Forge_Desk\\src\\mcp\\server.ts"] } } }
+  ```
 
 ### Phase 2 — Kanban + timeline views (planned)
 - Kanban board grouped by status, filterable by vision/project, drag to change status
