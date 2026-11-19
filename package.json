@@ -12,7 +12,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "test:db": "node scripts/db-smoke.ts",
     "mcp": "node src/mcp/server.ts",
-    "test:mcp": "node scripts/mcp-smoke.ts"
+    "test:mcp": "node scripts/mcp-smoke.ts",
+    "dist": "npm run build && electron-builder --win"
   },
   "devDependencies": {
     "@types/node": "^26.6.6",
@@ -20,6 +21,7 @@
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.3.0",
     "electron": "^45.4.1",
+    "electron-builder": "^26.18.0",
     "electron-vite": "^6.0.0",
     "typescript": "^7.0.2",
     "vite": "^8.3.8"

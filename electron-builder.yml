@@ -1,22 +1,31 @@
-# Packaging config for the (future) Windows installer.
-# electron-builder isn't a dependency yet — when packaging is added:
-#   npm i -D electron-builder
-#   npm run build && npx electron-builder --win
+# Windows installer config.  Build it with:  npm run dist
+# Output: dist/Forge-Desk-Setup-<version>.exe  (version from package.json)
 appId: com.forgedesk.app # must match app.setAppUserModelId() in src/main/index.ts
 productName: Forge Desk
 directories:
   buildResources: build # icon.ico / icon.png live here
   output: dist
+# The bundles in out/ only need Electron and Node built-ins (React etc. are compiled into the
+# renderer bundle), so no node_modules ship with the app.
 files:
   - out/**
   - package.json
+  - '!node_modules/**'
+# Reuse the Electron binary already in node_modules instead of downloading it again.
+electronDist: node_modules/electron/dist
 win:
   icon: build/icon.ico
   target: nsis
 nsis:
-  oneClick: false
+  oneClick: false # assisted installer: shows install location + progress
+  perMachine: false # per-user install, no admin prompt (%LOCALAPPDATA%\Programs\Forge Desk)
   allowToChangeInstallationDirectory: true
+  createDesktopShortcut: always
+  createStartMenuShortcut: true
+  shortcutName: Forge Desk
   installerIcon: build/icon.ico
   uninstallerIcon: build/icon.ico
   installerHeaderIcon: build/icon.ico
-  shortcutName: Forge Desk
+  # The database lives in %APPDATA%\ForgeDesk and is never touched by install/uninstall.
+  deleteAppDataOnUninstall: false
+  artifactName: Forge-Desk-Setup-${version}.${ext}

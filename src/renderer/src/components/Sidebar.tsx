@@ -1,3 +1,6 @@
+// Same art as the window/taskbar icon (build/icon.ico), so the app has one logo.
+import appIcon from '../../../../build/icon.png'
+
 export type View = 'today' | 'tasks' | 'completed'
 
 interface NavItem {
@@ -30,11 +33,7 @@ export function Sidebar(props: {
   return (
     <aside className="sidebar">
       <div className="brand">
-        <span className="brand-mark" aria-hidden>
-          <svg viewBox="0 0 24 24" width="20" height="20">
-            <path d="M4 14h11l3-4H8z M9 14v3h5v-3 M7 20h11" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" strokeLinecap="round" />
-          </svg>
-        </span>
+        <img className="brand-mark" src={appIcon} alt="" width={30} height={30} draggable={false} />
         <span className="brand-name">Forge Desk</span>
       </div>
       <nav className="nav">

@@ -17,6 +17,7 @@ A personal Windows desktop app for managing all of my projects in one place: lon
 - `npm run test:db` — smoke-test the shared DB layer in plain Node against a temp database
 - `npm run test:mcp` — end-to-end test of the MCP server over stdio (spawns it, calls every tool) against a temp database
 - `npm run mcp` — run the MCP server on stdio (normally launched by Claude, not by hand)
+- `npm run dist` — build the Windows installer: `dist/Forge-Desk-Setup-<version>.exe` (unpacked app in `dist/win-unpacked/`)
 
 ## Layout
 
@@ -37,10 +38,10 @@ scripts/            Node scripts (e.g. db-smoke.ts) run directly with Node's typ
 .claude/commands/   Project slash commands — next-task.md (the Claude Code handoff, see below)
 build/              App icon: icon-source.png (original art), icon.png (1024, transparent corners),
                     icon.ico (16/24/32/48/64/128/256). Also electron-builder's buildResources dir.
-electron-builder.yml  Installer config (not yet a dependency) — uses build/icon.ico
+electron-builder.yml  Windows installer config (NSIS, per-user) — `npm run dist`
 ```
 
-**App icon:** the main process imports `build/icon.ico?asset` (electron-vite copies it into `out/main/chunks`) and passes it as the `BrowserWindow` icon, which Windows also uses for the taskbar. To change the art, replace `build/icon-source.png` and run `python scripts/make-icon.py build/icon-source.png build` (needs Pillow). The script flood-fills the black background from the corners to make it transparent, softens the edge, and writes `icon.png` and the multi-size `icon.ico`.
+**App icon:** the main process imports `build/icon.ico?asset` (electron-vite copies it into `out/main/chunks`) and passes it as the `BrowserWindow` icon, which Windows also uses for the taskbar. The sidebar logo imports `build/icon.png`, and the installer, uninstaller and installed `.exe` use `build/icon.ico`, so there is one logo everywhere. To change the art, replace `build/icon-source.png` and run `python scripts/make-icon.py build/icon-source.png build` (needs Pillow). The script flood-fills the black background from the corners to make it transparent, softens the edge, and writes `icon.png` and the multi-size `icon.ico`.
 
 ## Conventions
 
@@ -137,6 +138,15 @@ Queue work for Claude Code from the app, have it built on a branch, review the r
 3. Review the branch, then mark the item done (or add a note and set it back to `todo`).
 
 Data/UI: `assignee` field and filter (Tasks page), `review` status, append-only notes in the detail panel; MCP `add_note` / `list_notes` and `assignee` on create/update/list.
+
+### Installer (done)
+`npm run dist` builds `dist/Forge-Desk-Setup-<version>.exe` with electron-builder (`electron-builder.yml`):
+- Assisted NSIS installer, **per-user** (no admin): installs to `%LOCALAPPDATA%\Programs\Forge Desk`, with a desktop shortcut and a Start menu entry. The app, installer and uninstaller all use `build/icon.ico`. Apps & features lists it for uninstalling.
+- The installed app uses the same database as dev and the MCP server (`%APPDATA%\ForgeDesk\forge-desk.db`, via `defaultDbPath()`). Install and uninstall never touch it.
+- Only `out/**` and `package.json` ship (`!node_modules/**`): the main and preload bundles need only Electron and Node built-ins, and React is compiled into the renderer bundle. If the main process ever gains a runtime npm dependency, remove that exclusion.
+- `electronDist` reuses `node_modules/electron/dist`, so builds don't re-download Electron.
+- **Updating:** bump `version` in package.json, run `npm run dist`, then run the new Setup exe over the old install. The same `appId` makes it an in-place upgrade. There is no auto-update.
+- Unsigned: Windows SmartScreen shows "Windows protected your PC" on first run; click *More info › Run anyway*.
 
 ### Phase 2 — Kanban + timeline views (planned)
 - Kanban board grouped by status, filterable by vision/project, drag to change status

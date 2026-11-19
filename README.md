@@ -15,6 +15,14 @@ npm run test:mcp   # end-to-end test of the MCP server
 npm run typecheck
 ```
 
+## Install as a normal Windows app
+
+```sh
+npm run dist
+```
+
+Then run `dist\Forge-Desk-Setup-<version>.exe`. It installs for your user only (no admin) and adds a desktop shortcut and a Start menu entry. The installed app uses the same database as `npm run dev` and the MCP server. To update, bump `version` in `package.json`, run `npm run dist` again, and run the new installer over the old one. The installer isn't code-signed, so on first run Windows SmartScreen asks you to confirm (*More info › Run anyway*).
+
 ## MCP server (let Claude manage your tasks)
 
 `src/mcp/server.ts` exposes `list_tasks`, `get_task`, `create_task`, `update_task`, `move_task`, `complete_task` and `get_today` over stdio, against the same database as the app. Changes appear in the running app within ~2 seconds.
