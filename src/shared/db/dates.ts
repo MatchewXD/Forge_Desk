@@ -26,6 +26,38 @@ export function isValidDate(s: string): boolean {
   return toLocalDateString(parseLocalDate(s)) === s
 }
 
+function isWeekend(date: string): boolean {
+  const day = parseLocalDate(date).getDay()
+  return day === 0 || day === 6
+}
+
+type RecurrenceRule = 'daily' | 'weekdays' | 'weekly'
+
+function step(rule: RecurrenceRule, date: string): string {
+  if (rule === 'weekly') return addDays(date, 7)
+  let next = addDays(date, 1)
+  if (rule === 'weekdays') while (isWeekend(next)) next = addDays(next, 1)
+  return next
+}
+
+/** First due date for a newly recurring item that has no deadline: today (next weekday for 'weekdays'). */
+export function firstOccurrence(rule: RecurrenceRule, today: string): string {
+  let d = today
+  if (rule === 'weekdays') while (isWeekend(d)) d = addDays(d, 1)
+  return d
+}
+
+/**
+ * Next due date after completing the occurrence due on `from`. Steps forward by the rule until
+ * the date is after `today`, so a missed streak doesn't leave the next occurrence already overdue
+ * and an early completion moves to the following period. Weekly keeps the same weekday.
+ */
+export function nextOccurrence(rule: RecurrenceRule, from: string, today: string): string {
+  let d = step(rule, from)
+  while (d <= today) d = step(rule, d)
+  return d
+}
+
 /** Whole days from `from` to `to` (positive if `to` is later). */
 export function daysBetween(from: string, to: string): number {
   const ms = parseLocalDate(to).getTime() - parseLocalDate(from).getTime()

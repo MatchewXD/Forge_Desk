@@ -8,13 +8,14 @@ async function call<T>(channel: string, ...args: unknown[]): Promise<T> {
 }
 
 const api: ForgeApi = {
-  getTree: () => call(CHANNELS.getTree),
+  getTree: (view) => call(CHANNELS.getTree, view),
   getToday: (today) => call(CHANNELS.getToday, today),
   getAncestors: (id) => call(CHANNELS.getAncestors, id),
   createTask: (input) => call(CHANNELS.createTask, input),
   updateTask: (id, patch) => call(CHANNELS.updateTask, id, patch),
   moveTask: (id, newParentId, index) => call(CHANNELS.moveTask, id, newParentId, index),
   completeTask: (id, cascade) => call(CHANNELS.completeTask, id, cascade),
+  reopenTask: (id) => call(CHANNELS.reopenTask, id),
   deleteTask: (id) => call(CHANNELS.deleteTask, id),
   dbPath: () => call(CHANNELS.dbPath),
   onExternalChange: (cb) => {

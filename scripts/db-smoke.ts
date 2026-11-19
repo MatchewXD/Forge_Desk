@@ -5,7 +5,15 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { TaskRepository, openDatabase, addDays, toLocalDateString } from '../src/shared/db/index.ts'
+import {
+  TaskRepository,
+  openDatabase,
+  addDays,
+  firstOccurrence,
+  nextOccurrence,
+  toLocalDateString,
+  type TaskNode
+} from '../src/shared/db/index.ts'
 
 const dir = mkdtempSync(join(tmpdir(), 'forge-desk-'))
 const dbPath = join(dir, 'test.db')
@@ -79,6 +87,75 @@ try {
   // Cascade delete
   repo.deleteTask(project.id)
   assert.equal(repo.getTask(m1.id), null)
+
+  // ---------- active / completed views ----------
+  const v2 = repo.createTask({ title: 'V2' })
+  const p2 = repo.createTask({ parentId: v2.id, title: 'P2' })
+  const msA = repo.createTask({ parentId: p2.id, title: 'MsA' })
+  const doneTask = repo.createTask({ parentId: msA.id, title: 'Done task' })
+  const openTask = repo.createTask({ parentId: msA.id, title: 'Open task' })
+  repo.completeTask(doneTask.id)
+  const titles = (nodes: TaskNode[]): string[] =>
+    nodes.flatMap((n) => [`${n.title}${n.isContext ? '*' : ''}`, ...titles(n.children)])
+  assert.deepEqual(titles(repo.getTree(v2.id, 'active')), ['V2', 'P2', 'MsA', 'Open task'])
+  assert.deepEqual(titles(repo.getTree(v2.id, 'completed')), ['V2*', 'P2*', 'MsA*', 'Done task'])
+  assert.equal(repo.getTree(v2.id, 'active')[0].progress, 0.5) // progress uses the full tree
+
+  // Done parent with an open child: parent stays in the active tree as context
+  repo.completeTask(msA.id)
+  assert.deepEqual(titles(repo.getTree(v2.id, 'active')), ['V2', 'P2', 'MsA*', 'Open task'])
+  assert.deepEqual(titles(repo.getTree(v2.id, 'completed')), ['V2*', 'P2*', 'MsA', 'Done task'])
+
+  // Reopening a child also reopens its done ancestors
+  repo.reopenTask(doneTask.id)
+  assert.equal(repo.getTask(msA.id)!.status, 'todo')
+  assert.equal(repo.getTask(doneTask.id)!.completedAt, null)
+  assert.deepEqual(titles(repo.getTree(v2.id, 'completed')), [])
+
+  // ---------- recurrence ----------
+  assert.equal(nextOccurrence('weekdays', '2026-11-20', '2026-11-19'), '2026-11-23') // Fri -> Mon
+  assert.equal(nextOccurrence('weekly', '2026-11-20', '2026-11-19'), '2026-11-27')
+  assert.equal(nextOccurrence('daily', '2026-11-10', '2026-11-19'), '2026-11-20') // missed days skip ahead
+  assert.equal(nextOccurrence('weekly', '2026-11-02', '2026-11-19'), '2026-11-23') // keeps weekday (Mon)
+  assert.equal(firstOccurrence('weekdays', '2026-11-21'), '2026-11-23') // Sat -> Mon
+
+  assert.throws(() => repo.updateTask(msA.id, { recurrence: 'daily' }), /Only tasks and micro-tasks/)
+  assert.throws(() => repo.updateTask(openTask.id, { recurrence: 'hourly' as never }), /Invalid recurrence/)
+
+  const daily = repo.createTask({ parentId: msA.id, title: 'Standup', recurrence: 'daily' })
+  assert.equal(daily.deadline, today) // no deadline given -> first occurrence today
+  const step1 = repo.createTask({ parentId: daily.id, title: 'Check board' })
+  repo.completeTask(step1.id)
+
+  const afterDaily = repo.completeTask(daily.id)
+  assert.equal(afterDaily.status, 'todo')
+  assert.equal(afterDaily.deadline, addDays(today, 1))
+  assert.equal(repo.getTask(step1.id)!.status, 'todo') // checklist resets with it
+  let log = repo.listCompletions(daily.id)
+  assert.equal(log.length, 1)
+  assert.equal(log[0].occurrenceDate, today)
+
+  // status=done through updateTask also logs an occurrence
+  repo.updateTask(daily.id, { status: 'done' })
+  assert.equal(repo.getTask(daily.id)!.deadline, addDays(today, 2))
+  log = repo.listCompletions(daily.id)
+  assert.equal(log.length, 2)
+
+  // Completed view: recurring task as context, carrying its log
+  const done = repo.getTree(v2.id, 'completed')
+  const standup = done[0].children[0].children[0].children.find((n) => n.title === 'Standup')!
+  assert.equal(standup.isContext, true)
+  assert.equal(standup.completions!.length, 2)
+  // Still in the active tree and on Today when due
+  assert.ok(titles(repo.getTree(v2.id, 'active')).includes('Standup'))
+
+  const weekly = repo.createTask({ parentId: msA.id, title: 'Review', recurrence: 'weekly', deadline: addDays(today, -3) })
+  assert.deepEqual(repo.getToday(today).overdue.map((t) => t.title), ['Review'])
+  assert.equal(repo.completeTask(weekly.id).deadline, addDays(today, 4))
+
+  // Turning recurrence off makes it a normal task again
+  repo.updateTask(weekly.id, { recurrence: null })
+  assert.equal(repo.completeTask(weekly.id).status, 'done')
 
   otherDb.close()
   db.close()

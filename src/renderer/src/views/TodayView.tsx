@@ -1,7 +1,7 @@
 import type { TaskWithPath } from '@shared/db/model.ts'
 import { useForge } from '../store'
 import { longDate } from '../lib'
-import { CheckButton, DeadlineChip, LevelTag, PriorityDot } from '../components/Badges'
+import { CheckButton, DeadlineChip, LevelTag, PriorityDot, RecurrenceTag } from '../components/Badges'
 
 export function TodayView(props: { onOpenTask: (id: number) => void }): React.JSX.Element {
   const { today: view, tree } = useForge()
@@ -112,7 +112,11 @@ function TodayRow(props: { task: TaskWithPath; today: string; onOpen: (id: numbe
   const forge = useForge()
   return (
     <div className="today-row" onClick={() => props.onOpen(t.id)} title="Open in Tasks">
-      <CheckButton checked={false} onToggle={() => void forge.setDone(t.id, true)} />
+      <CheckButton
+        checked={false}
+        onToggle={() => void forge.complete(t)}
+        title={t.recurrence ? 'Complete this occurrence' : 'Mark as done'}
+      />
       <div className="today-main">
         <div className="today-title">
           {t.title}
@@ -121,6 +125,7 @@ function TodayRow(props: { task: TaskWithPath; today: string; onOpen: (id: numbe
         </div>
         {t.path.length > 0 && <div className="today-path">{t.path.join(' › ')}</div>}
       </div>
+      <RecurrenceTag recurrence={t.recurrence} />
       <LevelTag level={t.level} />
       <PriorityDot priority={t.priority} />
       <DeadlineChip deadline={t.deadline} today={props.today} />

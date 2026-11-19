@@ -14,6 +14,7 @@ import { z } from 'zod'
 import {
   LEVELS,
   PRIORITIES,
+  RECURRENCES,
   STATUSES,
   TaskRepository,
   defaultDbPath,
@@ -41,6 +42,14 @@ const id = z.number().int().positive()
 const level = z.enum(LEVELS)
 const status = z.enum(STATUSES)
 const priority = z.enum(PRIORITIES)
+const recurrence = z
+  .enum(RECURRENCES)
+  .nullable()
+  .describe(
+    'Repeat rule for tasks/micro-tasks: daily, weekdays (Mon-Fri) or weekly (same weekday). null = not recurring. ' +
+      'Completing a recurring task logs the occurrence to the Completed archive and moves its deadline to the ' +
+      'next occurrence; it never stays done. Without a deadline the first occurrence is due today.'
+  )
 const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD')
 
 const HIERARCHY =
@@ -53,12 +62,15 @@ server.registerTool(
     title: 'List tasks',
     description:
       'List items on the Forge Desk task board. With tree=true returns the nested hierarchy with ' +
-      'rolled-up progress (0..1) and leaf counts, optionally limited to the subtree under root_id. ' +
+      'rolled-up progress (0..1) and leaf counts, optionally limited to the subtree under root_id; ' +
+      'view=active hides done items (like the Tasks page in the app), view=completed shows the archive with ' +
+      'recurring-task completion logs; items only present to show hierarchy have isContext=true. ' +
       'Otherwise returns a flat list filtered by the given fields. ' +
       HIERARCHY,
     inputSchema: {
       tree: z.boolean().optional().describe('Return the nested tree with progress instead of a flat list'),
       root_id: id.optional().describe('With tree=true: only the subtree under this item'),
+      view: z.enum(['all', 'active', 'completed']).optional().describe('With tree=true (default all)'),
       parent_id: id.nullable().optional().describe('Direct children of this item (null = top-level visions)'),
       level: level.optional(),
       status: z.union([status, z.array(status)]).optional(),
@@ -70,7 +82,7 @@ server.registerTool(
   (a) =>
     run(() =>
       a.tree
-        ? repo.getTree(a.root_id)
+        ? repo.getTree(a.root_id, a.view)
         : repo.listTasks({
             parentId: a.parent_id,
             level: a.level,
@@ -86,7 +98,8 @@ server.registerTool(
   {
     title: 'Get task',
     description:
-      'Get one item with its rolled-up progress, its ancestors (root first) and its full subtree of children.',
+      'Get one item with its rolled-up progress, its ancestors (root first), its full subtree of children, ' +
+      'and (for recurring tasks) its log of completed occurrences.',
     inputSchema: { id },
     annotations: { readOnlyHint: true }
   },
@@ -108,7 +121,8 @@ server.registerTool(
       description: z.string().optional(),
       status: status.optional().describe('Default todo'),
       deadline: date.nullable().optional(),
-      priority: priority.optional().describe('Default medium')
+      priority: priority.optional().describe('Default medium'),
+      recurrence: recurrence.optional()
     }
   },
   (a) =>
@@ -120,7 +134,8 @@ server.registerTool(
         description: a.description,
         status: a.status,
         deadline: a.deadline,
-        priority: a.priority
+        priority: a.priority,
+        recurrence: a.recurrence
       })
     )
 )
@@ -130,7 +145,9 @@ server.registerTool(
   {
     title: 'Update task',
     description:
-      'Update fields of an item. Only the fields you pass change. Pass deadline=null to clear it. ' +
+      'Update fields of an item. Only the fields you pass change. Pass deadline=null to clear it, ' +
+      'recurrence=null to stop repeating. Setting status=done on a recurring task completes the current ' +
+      'occurrence. Setting a done item back to todo/in_progress also reopens its done ancestors. ' +
       'To change the parent or position use move_task.',
     inputSchema: {
       id,
@@ -138,9 +155,9 @@ server.registerTool(
       description: z.string().optional(),
       status: status.optional(),
       deadline: date.nullable().optional(),
-      priority: priority.optional()
-    },
-    annotations: { idempotentHint: true }
+      priority: priority.optional(),
+      recurrence: recurrence.optional()
+    }
   },
   ({ id, ...patch }) => run(() => repo.updateTask(id, patch))
 )
@@ -166,10 +183,11 @@ server.registerTool(
   {
     title: 'Complete task',
     description:
-      'Mark an item done. With cascade=true also marks all of its open descendants done ' +
-      '(otherwise a parent stays below 100% progress until its children are done).',
-    inputSchema: { id, cascade: z.boolean().optional() },
-    annotations: { idempotentHint: true }
+      'Mark an item done (it moves to the Completed archive). With cascade=true also marks all of its open ' +
+      'descendants done (otherwise a parent stays below 100% progress until its children are done). ' +
+      'For a recurring task this logs the occurrence, resets it and its sub-items to todo, and returns it ' +
+      'with the next deadline — call once per occurrence.',
+    inputSchema: { id, cascade: z.boolean().optional() }
   },
   (a) => run(() => repo.completeTask(a.id, { cascade: a.cascade }))
 )

@@ -1,21 +1,26 @@
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite'
 import {
   PRIORITIES,
+  RECURRENCES,
+  RECURRING_LEVELS,
   STATUSES,
   childLevel,
   parentLevel,
+  type Completion,
   type CreateTaskInput,
   type ListTasksFilter,
   type Level,
   type Priority,
+  type Recurrence,
   type Status,
   type Task,
   type TaskNode,
   type TaskWithPath,
   type TodayView,
+  type TreeView,
   type UpdateTaskInput
 } from './model.ts'
-import { addDays, isValidDate, toLocalDateString } from './dates.ts'
+import { addDays, firstOccurrence, isValidDate, nextOccurrence, toLocalDateString } from './dates.ts'
 
 interface TaskRow {
   id: number
@@ -26,10 +31,18 @@ interface TaskRow {
   status: Status
   deadline: string | null
   priority: Priority
+  recurrence: Recurrence | null
   sort_order: number
   created_at: string
   updated_at: string
   completed_at: string | null
+}
+
+interface CompletionRow {
+  id: number
+  task_id: number
+  occurrence_date: string | null
+  completed_at: string
 }
 
 export class TaskError extends Error {
@@ -49,11 +62,16 @@ function toTask(r: TaskRow): Task {
     status: r.status,
     deadline: r.deadline,
     priority: r.priority,
+    recurrence: r.recurrence ?? null,
     sortOrder: r.sort_order,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
     completedAt: r.completed_at
   }
+}
+
+function toCompletion(r: CompletionRow): Completion {
+  return { id: r.id, taskId: r.task_id, occurrenceDate: r.occurrence_date, completedAt: r.completed_at }
 }
 
 const PRIORITY_RANK: Record<Priority, number> = { urgent: 0, high: 1, medium: 2, low: 3 }
@@ -115,8 +133,27 @@ export class TaskRepository {
     return (this.db.prepare(sql).all(...params) as unknown as TaskRow[]).map(toTask)
   }
 
-  /** The full forest (or the subtree under rootId) with rolled-up progress. */
-  getTree(rootId?: number): TaskNode[] {
+  /** Logged occurrences of recurring tasks, newest first (optionally for one task). */
+  listCompletions(taskId?: number): Completion[] {
+    const rows =
+      taskId === undefined
+        ? this.db.prepare('SELECT * FROM task_completions ORDER BY completed_at DESC, id DESC').all()
+        : this.db
+            .prepare('SELECT * FROM task_completions WHERE task_id = ? ORDER BY completed_at DESC, id DESC')
+            .all(taskId)
+    return (rows as unknown as CompletionRow[]).map(toCompletion)
+  }
+
+  /**
+   * The forest (or the subtree under rootId) with rolled-up progress.
+   * - 'all': everything.
+   * - 'active': open items. A done item is kept only as greyed context (`isContext`) when it
+   *   still has open descendants.
+   * - 'completed': done items and recurring tasks with logged completions (`completions`),
+   *   plus their open ancestors as context so the original hierarchy is visible.
+   * Progress is always computed on the full tree, so bars don't change with the view.
+   */
+  getTree(rootId?: number, view: TreeView = 'all'): TaskNode[] {
     const nodes = new Map<number, TaskNode>()
     for (const t of this.listTasks()) {
       nodes.set(t.id, { ...t, children: [], progress: 0, leafCount: 0, leafDone: 0 })
@@ -134,11 +171,26 @@ export class TaskRepository {
     sortRec(roots)
     for (const r of roots) computeProgress(r)
 
+    let forest = roots
     if (rootId !== undefined) {
       const root = nodes.get(rootId)
-      return root ? [root] : []
+      forest = root ? [root] : []
     }
-    return roots
+    if (view === 'active') {
+      return prune(forest, (n) => n.status !== 'done')
+    }
+    if (view === 'completed') {
+      for (const c of this.listCompletions()) {
+        const n = nodes.get(c.taskId)
+        if (n) (n.completions ??= []).push(c)
+      }
+      return prune(
+        forest,
+        (n) => n.status === 'done' || (n.completions?.length ?? 0) > 0,
+        (n) => n.status !== 'done'
+      )
+    }
+    return forest
   }
 
   /** Ancestors of a task, root first (excluding the task itself). */
@@ -156,14 +208,17 @@ export class TaskRepository {
     return rows.map(toTask)
   }
 
-  /** One item with rolled-up progress, its ancestors (root first) and its full subtree. */
-  getTaskDetail(id: number): { task: TaskNode; ancestors: Task[] } {
+  /** One item with rolled-up progress, its ancestors (root first), subtree, and completion log. */
+  getTaskDetail(id: number): { task: TaskNode; ancestors: Task[]; completions: Completion[] } {
     const [node] = this.getTree(id)
     if (!node) throw new TaskError(`Task ${id} not found`)
-    return { task: node, ancestors: this.getAncestors(id) }
+    return { task: node, ancestors: this.getAncestors(id), completions: this.listCompletions(id) }
   }
 
-  /** Overdue, due today, and due in the next `days` days. Done items are excluded. */
+  /**
+   * Overdue, due today, and due in the next `days` days. Done items are excluded; recurring
+   * tasks appear by their current (next) deadline.
+   */
   getToday(today: string = toLocalDateString(), days = 7): TodayView {
     const horizon = addDays(today, days)
     const all = this.listTasks()
@@ -211,21 +266,22 @@ export class TaskRepository {
 
     const status = input.status ?? 'todo'
     const priority = input.priority ?? 'medium'
-    const deadline = input.deadline ?? null
-    validateFields({ status, priority, deadline })
+    const recurrence = input.recurrence ?? null
+    validateFields({ status, priority, deadline: input.deadline, recurrence })
+    validateRecurrence(level, recurrence)
+    let deadline = input.deadline ?? null
+    if (recurrence && !deadline) deadline = firstOccurrence(recurrence, toLocalDateString())
 
     const now = new Date().toISOString()
     return this.tx(() => {
       const next = this.db
-        .prepare(
-          'SELECT COALESCE(MAX(sort_order), -1) + 1 AS n FROM tasks WHERE parent_id IS ?'
-        )
+        .prepare('SELECT COALESCE(MAX(sort_order), -1) + 1 AS n FROM tasks WHERE parent_id IS ?')
         .get(parentId) as { n: number }
       const result = this.db
         .prepare(
           `INSERT INTO tasks (parent_id, level, title, description, status, deadline, priority,
-                              sort_order, created_at, updated_at, completed_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+                              recurrence, sort_order, created_at, updated_at, completed_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .run(
           parentId,
@@ -235,6 +291,7 @@ export class TaskRepository {
           status,
           deadline,
           priority,
+          recurrence,
           next.n,
           now,
           now,
@@ -244,9 +301,23 @@ export class TaskRepository {
     })
   }
 
+  /**
+   * Patch fields. Setting status to 'done' on a recurring task completes the current occurrence
+   * (see completeTask). Reopening a done item also reopens its done ancestors, so it reappears
+   * in the active tree under its original parents.
+   */
   updateTask(id: number, patch: UpdateTaskInput): Task {
     const current = this.requireTask(id)
     validateFields(patch)
+
+    const recurrence = patch.recurrence !== undefined ? patch.recurrence : current.recurrence
+    if (patch.recurrence !== undefined) validateRecurrence(current.level, patch.recurrence)
+    if (patch.status === 'done' && recurrence && current.status !== 'done') {
+      const { status: _ignored, ...rest } = patch
+      this.updateTask(id, rest)
+      return this.completeTask(id)
+    }
+
     const sets: string[] = []
     const params: SQLInputValue[] = []
     const now = new Date().toISOString()
@@ -265,10 +336,18 @@ export class TaskRepository {
       sets.push('priority = ?')
       params.push(patch.priority)
     }
-    if (patch.deadline !== undefined) {
-      sets.push('deadline = ?')
-      params.push(patch.deadline || null)
+    let deadline = patch.deadline !== undefined ? patch.deadline || null : current.deadline
+    if (patch.recurrence !== undefined) {
+      sets.push('recurrence = ?')
+      params.push(patch.recurrence)
+      // A recurring item always has a next due date.
+      if (patch.recurrence && !deadline) deadline = firstOccurrence(patch.recurrence, toLocalDateString())
     }
+    if (deadline !== current.deadline) {
+      sets.push('deadline = ?')
+      params.push(deadline)
+    }
+    const reopening = patch.status !== undefined && patch.status !== 'done' && current.status === 'done'
     if (patch.status !== undefined && patch.status !== current.status) {
       sets.push('status = ?', 'completed_at = ?')
       params.push(patch.status, patch.status === 'done' ? now : null)
@@ -277,14 +356,48 @@ export class TaskRepository {
 
     sets.push('updated_at = ?')
     params.push(now, id)
-    this.db.prepare(`UPDATE tasks SET ${sets.join(', ')} WHERE id = ?`).run(...params)
-    return this.requireTask(id)
+    return this.tx(() => {
+      this.db.prepare(`UPDATE tasks SET ${sets.join(', ')} WHERE id = ?`).run(...params)
+      if (reopening) this.reopenDoneAncestors(id, now)
+      return this.requireTask(id)
+    })
   }
 
-  /** Mark done. With cascade, also marks every open descendant done. */
+  /**
+   * Mark done. With cascade, also marks every open descendant done.
+   * Recurring task: logs the completion, resets it (and its descendants) to todo, and moves the
+   * deadline to the next occurrence. It never stays 'done'.
+   */
   completeTask(id: number, opts: { cascade?: boolean } = {}): Task {
-    this.requireTask(id)
+    const task = this.requireTask(id)
     const now = new Date().toISOString()
+    if (task.recurrence && task.status !== 'done') {
+      const today = toLocalDateString()
+      const next = nextOccurrence(task.recurrence, task.deadline ?? today, today)
+      return this.tx(() => {
+        this.db
+          .prepare('INSERT INTO task_completions (task_id, occurrence_date, completed_at) VALUES (?, ?, ?)')
+          .run(id, task.deadline, now)
+        this.db
+          .prepare(
+            `UPDATE tasks SET status = 'todo', completed_at = NULL, deadline = ?, updated_at = ?
+             WHERE id = ?`
+          )
+          .run(next, now, id)
+        // Sub-items of a recurring task are a checklist that repeats with it.
+        this.db
+          .prepare(
+            `WITH RECURSIVE sub(id) AS (
+               SELECT id FROM tasks WHERE parent_id = ?
+               UNION ALL SELECT t.id FROM tasks t JOIN sub ON t.parent_id = sub.id
+             )
+             UPDATE tasks SET status = 'todo', completed_at = NULL, updated_at = ?
+             WHERE id IN sub AND status = 'done'`
+          )
+          .run(id, now)
+        return this.requireTask(id)
+      })
+    }
     this.tx(() => {
       if (opts.cascade) {
         this.db
@@ -306,6 +419,12 @@ export class TaskRepository {
       }
     })
     return this.requireTask(id)
+  }
+
+  /** Back to todo (and its done ancestors with it). No-op for an item that isn't done. */
+  reopenTask(id: number): Task {
+    const task = this.requireTask(id)
+    return task.status === 'done' ? this.updateTask(id, { status: 'todo' }) : task
   }
 
   /**
@@ -346,13 +465,26 @@ export class TaskRepository {
     })
   }
 
-  /** Deletes the task and (via ON DELETE CASCADE) all of its descendants. */
+  /** Deletes the task and (via ON DELETE CASCADE) all of its descendants and completion logs. */
   deleteTask(id: number): void {
     this.requireTask(id)
     this.db.prepare('DELETE FROM tasks WHERE id = ?').run(id)
   }
 
   // ---------- helpers ----------
+
+  private reopenDoneAncestors(id: number, now: string): void {
+    this.db
+      .prepare(
+        `WITH RECURSIVE anc(id, parent_id) AS (
+           SELECT id, parent_id FROM tasks WHERE id = ?
+           UNION ALL SELECT t.id, t.parent_id FROM tasks t JOIN anc ON t.id = anc.parent_id
+         )
+         UPDATE tasks SET status = 'todo', completed_at = NULL, updated_at = ?
+         WHERE id IN (SELECT id FROM anc WHERE id != ?) AND status = 'done'`
+      )
+      .run(id, now, id)
+  }
 
   private requireTask(id: number): Task {
     const t = this.getTask(id)
@@ -361,6 +493,7 @@ export class TaskRepository {
   }
 
   private tx<T>(fn: () => T): T {
+    if (this.db.isTransaction) return fn()
     this.db.exec('BEGIN IMMEDIATE')
     try {
       const out = fn()
@@ -371,6 +504,24 @@ export class TaskRepository {
       throw err
     }
   }
+}
+
+/**
+ * Keep nodes matching `keep`, plus any ancestor of a kept node (marked isContext unless it
+ * matches). `context` overrides which kept nodes are shown as greyed context.
+ */
+function prune(
+  nodes: TaskNode[],
+  keep: (n: TaskNode) => boolean,
+  context: (n: TaskNode) => boolean = (n) => !keep(n)
+): TaskNode[] {
+  const out: TaskNode[] = []
+  for (const n of nodes) {
+    const children = prune(n.children, keep, context)
+    const kept = keep(n)
+    if (kept || children.length > 0) out.push({ ...n, children, isContext: !kept || context(n) })
+  }
+  return out
 }
 
 function computeProgress(n: TaskNode): void {
@@ -392,7 +543,18 @@ function computeProgress(n: TaskNode): void {
   n.progress = sum / n.children.length
 }
 
-function validateFields(f: { status?: string; priority?: string; deadline?: string | null }): void {
+function validateRecurrence(level: Level, recurrence: Recurrence | null | undefined): void {
+  if (recurrence && !RECURRING_LEVELS.includes(level)) {
+    throw new TaskError(`Only tasks and micro-tasks can repeat, not a ${level}`)
+  }
+}
+
+function validateFields(f: {
+  status?: string
+  priority?: string
+  deadline?: string | null
+  recurrence?: string | null
+}): void {
   if (f.status !== undefined && !(STATUSES as readonly string[]).includes(f.status)) {
     throw new TaskError(`Invalid status "${f.status}" (expected ${STATUSES.join(', ')})`)
   }
@@ -401,5 +563,8 @@ function validateFields(f: { status?: string; priority?: string; deadline?: stri
   }
   if (f.deadline && !isValidDate(f.deadline)) {
     throw new TaskError(`Invalid deadline "${f.deadline}" (expected YYYY-MM-DD)`)
+  }
+  if (f.recurrence && !(RECURRENCES as readonly string[]).includes(f.recurrence)) {
+    throw new TaskError(`Invalid recurrence "${f.recurrence}" (expected ${RECURRENCES.join(', ')} or null)`)
   }
 }

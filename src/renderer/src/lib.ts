@@ -70,3 +70,16 @@ export function longDate(date: string): string {
 export function pct(progress: number): string {
   return `${Math.round(progress * 100)}%`
 }
+
+/** Done items plus logged recurring occurrences in a completed-view tree. */
+export function countCompleted(nodes: TaskNode[]): number {
+  return nodes.reduce(
+    (sum, n) =>
+      sum + (n.isContext ? 0 : 1) + (n.completions?.length ?? 0) + countCompleted(n.children),
+    0
+  )
+}
+
+export function formatTimestamp(iso: string): string {
+  return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+}

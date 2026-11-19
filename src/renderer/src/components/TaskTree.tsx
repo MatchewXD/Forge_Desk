@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { LEVEL_LABELS, childLevel, type Level, type TaskNode } from '@shared/db/model.ts'
 import { useForge } from '../store'
-import { CheckButton, DeadlineChip, LevelTag, PriorityDot, ProgressBar } from './Badges'
+import { CheckButton, DeadlineChip, LevelTag, PriorityDot, ProgressBar, RecurrenceTag } from './Badges'
 
 export type AddTarget = number | 'root' | null
 
@@ -12,7 +12,6 @@ interface Props {
   onToggleExpand: (id: number) => void
   selectedId: number | null
   onSelect: (id: number) => void
-  hideDone: boolean
   addTarget: AddTarget
   onAddTarget: (t: AddTarget) => void
 }
@@ -22,7 +21,6 @@ export function TaskTree(props: Props): React.JSX.Element {
 
   const walk = (nodes: TaskNode[], depth: number): void => {
     for (const n of nodes) {
-      if (props.hideDone && n.status === 'done') continue
       const open = props.expanded.has(n.id)
       rows.push(<TreeRow key={n.id} node={n} depth={depth} open={open} {...props} />)
       if (open || props.addTarget === n.id) {
@@ -65,14 +63,16 @@ function TreeRow(props: Props & { node: TaskNode; depth: number; open: boolean }
   const openDescendants = n.leafCount - n.leafDone
 
   const toggleDone = (): void => {
-    if (!done && hasChildren && openDescendants > 0) {
+    // A done row in the active tree is context for open descendants: clicking reopens it.
+    if (done) return void forge.reopen(n)
+    if (!n.recurrence && hasChildren && openDescendants > 0) {
       const ok = window.confirm(
         `Mark "${n.title}" and its ${openDescendants} open sub-item(s) as done?`
       )
       if (!ok) return
-      void forge.setDone(n.id, true, true)
+      void forge.complete(n, true)
     } else {
-      void forge.setDone(n.id, !done)
+      void forge.complete(n)
     }
   }
 
@@ -81,7 +81,7 @@ function TreeRow(props: Props & { node: TaskNode; depth: number; open: boolean }
       role="treeitem"
       aria-expanded={hasChildren ? open : undefined}
       aria-selected={props.selectedId === n.id}
-      className={`tree-row depth-${depth}${props.selectedId === n.id ? ' selected' : ''}${done ? ' done' : ''}`}
+      className={`tree-row depth-${depth}${props.selectedId === n.id ? ' selected' : ''}${n.isContext ? ' context' : ''}`}
       style={{ paddingLeft: 12 + depth * 22 }}
       onClick={() => props.onSelect(n.id)}
       onDoubleClick={() => hasChildren && props.onToggleExpand(n.id)}
@@ -103,12 +103,17 @@ function TreeRow(props: Props & { node: TaskNode; depth: number; open: boolean }
       ) : (
         <span className="chevron-spacer" />
       )}
-      <CheckButton checked={done} onToggle={toggleDone} />
+      <CheckButton
+        checked={done}
+        onToggle={toggleDone}
+        title={done ? 'Done — click to reopen' : n.recurrence ? 'Complete this occurrence' : undefined}
+      />
       <LevelTag level={n.level} />
       <span className="tree-title">{n.title}</span>
       {n.status === 'in_progress' && <span className="mini-status in_progress">In progress</span>}
       {n.status === 'blocked' && <span className="mini-status blocked">Blocked</span>}
       <span className="tree-meta">
+        <RecurrenceTag recurrence={n.recurrence} compact />
         <DeadlineChip deadline={n.deadline} today={props.today} done={done} />
         <PriorityDot priority={n.priority} />
         <span className="tree-progress">

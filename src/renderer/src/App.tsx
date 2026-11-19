@@ -4,7 +4,8 @@ import { ForgeContext, useForgeData } from './store'
 import { Sidebar, type View } from './components/Sidebar'
 import { TasksView } from './views/TasksView'
 import { TodayView } from './views/TodayView'
-import { ancestorIds, indexTree } from './lib'
+import { CompletedView } from './views/CompletedView'
+import { ancestorIds, countCompleted, indexTree } from './lib'
 import type { AddTarget } from './components/TaskTree'
 
 export type ExpandedUpdate = Set<number> | ((prev: Set<number>) => Set<number>)
@@ -30,17 +31,12 @@ export default function App(): React.JSX.Element {
   const forge = useForgeData()
   const [view, setView] = useState<View>(() => loadPref<View>('view', 'today'))
   const [expanded, setExpandedState] = useState<Set<number>>(() => new Set(loadPref<number[]>('expanded', [])))
-  const [hideDone, setHideDoneState] = useState(() => loadPref('hideDone', false))
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [addTarget, setAddTarget] = useState<AddTarget>(null)
   const firstLoad = useRef(true)
 
   const setExpanded = (update: ExpandedUpdate): void => setExpandedState(update)
   useEffect(() => savePref('expanded', [...expanded]), [expanded])
-  const setHideDone = (v: boolean): void => {
-    setHideDoneState(v)
-    savePref('hideDone', v)
-  }
   const navigate = (v: View): void => {
     setView(v)
     savePref('view', v)
@@ -75,6 +71,7 @@ export default function App(): React.JSX.Element {
   }
 
   const today = forge.today?.today ?? toLocalDateString()
+  const completedCount = useMemo(() => countCompleted(forge.completed), [forge.completed])
 
   return (
     <ForgeContext.Provider value={forge}>
@@ -82,11 +79,17 @@ export default function App(): React.JSX.Element {
         <Sidebar
           view={view}
           onNavigate={navigate}
-          counts={{ overdue: forge.today?.overdue.length ?? 0, today: forge.today?.dueToday.length ?? 0 }}
+          counts={{
+            overdue: forge.today?.overdue.length ?? 0,
+            today: forge.today?.dueToday.length ?? 0,
+            completed: completedCount
+          }}
         />
         <main className="content">
           {!forge.loaded ? null : view === 'today' ? (
             <TodayView onOpenTask={openTask} />
+          ) : view === 'completed' ? (
+            <CompletedView />
           ) : (
             <TasksView
               today={today}
@@ -94,17 +97,31 @@ export default function App(): React.JSX.Element {
               setExpanded={setExpanded}
               selectedId={selectedId}
               onSelect={setSelectedId}
-              hideDone={hideDone}
-              setHideDone={setHideDone}
               addTarget={addTarget}
               setAddTarget={setAddTarget}
             />
           )}
         </main>
-        {forge.error && (
-          <div className="toast" role="alert">
-            <span>{forge.error}</span>
-            <button type="button" className="icon-btn" onClick={forge.clearError} aria-label="Dismiss">
+        {forge.notice && (
+          <div
+            key={forge.notice.id}
+            className={`toast ${forge.notice.kind}`}
+            role={forge.notice.kind === 'error' ? 'alert' : 'status'}
+          >
+            <span>{forge.notice.text}</span>
+            {forge.notice.action && (
+              <button
+                type="button"
+                className="toast-action"
+                onClick={() => {
+                  forge.notice?.action?.run()
+                  forge.dismissNotice()
+                }}
+              >
+                {forge.notice.action.label}
+              </button>
+            )}
+            <button type="button" className="icon-btn" onClick={forge.dismissNotice} aria-label="Dismiss">
               ×
             </button>
           </div>

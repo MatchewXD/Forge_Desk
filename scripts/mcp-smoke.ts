@@ -72,6 +72,27 @@ try {
   const flat = await call('list_tasks', { level: 'milestone' })
   assert.equal(flat.length, 2)
 
+  // Active / completed views
+  const active = await call('list_tasks', { tree: true, view: 'active' })
+  assert.ok(!JSON.stringify(active).includes('"title":"Task"'))
+  const archive = await call('list_tasks', { tree: true, view: 'completed' })
+  assert.equal(archive[0].isContext, true)
+
+  // Recurrence through create_task / update_task / complete_task
+  const rec = await call('create_task', { title: 'Daily review', parent_id: ms1.id, recurrence: 'daily' })
+  assert.equal(rec.recurrence, 'daily')
+  assert.equal(rec.deadline, today)
+  assert.equal((await call('get_today')).dueToday[0].title, 'Daily review')
+  const next = await call('complete_task', { id: rec.id })
+  assert.equal(next.status, 'todo')
+  assert.notEqual(next.deadline, today)
+  const recDetail = await call('get_task', { id: rec.id })
+  assert.equal(recDetail.completions.length, 1)
+  const weekly = await call('update_task', { id: rec.id, recurrence: 'weekly' })
+  assert.equal(weekly.recurrence, 'weekly')
+  assert.equal((await call('update_task', { id: rec.id, recurrence: null })).recurrence, null)
+  await assert.rejects(call('update_task', { id: ms1.id, recurrence: 'daily' }), /Only tasks and micro-tasks/)
+
   // Repository rules surface as tool errors
   await assert.rejects(call('create_task', { title: 'Bad', parent_id: vision.id, level: 'task' }), /must be a project/)
   await assert.rejects(call('move_task', { id: task.id, new_parent_id: project.id }), /only be moved under a milestone/)

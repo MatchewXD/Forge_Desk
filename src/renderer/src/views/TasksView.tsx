@@ -1,5 +1,4 @@
 import { useMemo } from 'react'
-import type { TaskNode } from '@shared/db/model.ts'
 import { useForge } from '../store'
 import { indexTree } from '../lib'
 import { TaskTree, type AddTarget } from '../components/TaskTree'
@@ -13,14 +12,12 @@ interface Props {
   setExpanded: (update: ExpandedUpdate) => void
   selectedId: number | null
   onSelect: (id: number | null) => void
-  hideDone: boolean
-  setHideDone: (v: boolean) => void
   addTarget: AddTarget
   setAddTarget: (t: AddTarget) => void
 }
 
 export function TasksView(p: Props): React.JSX.Element {
-  const { tree } = useForge()
+  const { tree, completed } = useForge()
   const index = useMemo(() => indexTree(tree), [tree])
   const selected = p.selectedId != null ? (index.get(p.selectedId)?.node ?? null) : null
 
@@ -44,7 +41,6 @@ export function TasksView(p: Props): React.JSX.Element {
   }
 
   const overall = tree.length ? tree.reduce((s, n) => s + n.progress, 0) / tree.length : 0
-  const visibleRoots: TaskNode[] = p.hideDone ? tree.filter((n) => n.status !== 'done') : tree
 
   return (
     <div className="view tasks-view">
@@ -65,10 +61,6 @@ export function TasksView(p: Props): React.JSX.Element {
             </p>
           </div>
           <div className="toolbar">
-            <label className="toggle">
-              <input type="checkbox" checked={p.hideDone} onChange={(e) => p.setHideDone(e.target.checked)} />
-              Hide completed
-            </label>
             <button type="button" className="btn ghost" onClick={expandAll}>
               Expand all
             </button>
@@ -83,11 +75,20 @@ export function TasksView(p: Props): React.JSX.Element {
 
         {tree.length === 0 && p.addTarget !== 'root' ? (
           <div className="empty">
-            <h2>Start with a vision</h2>
-            <p className="muted">
-              A vision is the big-picture goal. Break it into projects, milestones, tasks and micro-tasks —
-              progress rolls up automatically.
-            </p>
+            {completed.length > 0 ? (
+              <>
+                <h2>Everything is done</h2>
+                <p className="muted">Finished items live on the Completed page. Start a new vision?</p>
+              </>
+            ) : (
+              <>
+                <h2>Start with a vision</h2>
+                <p className="muted">
+                  A vision is the big-picture goal. Break it into projects, milestones, tasks and micro-tasks —
+                  progress rolls up automatically.
+                </p>
+              </>
+            )}
             <button type="button" className="btn primary" onClick={() => p.setAddTarget('root')}>
               + Create your first vision
             </button>
@@ -95,13 +96,12 @@ export function TasksView(p: Props): React.JSX.Element {
         ) : (
           <div className="tree-scroll">
             <TaskTree
-              roots={visibleRoots}
+              roots={tree}
               today={p.today}
               expanded={p.expanded}
               onToggleExpand={toggleExpand}
               selectedId={p.selectedId}
               onSelect={p.onSelect}
-              hideDone={p.hideDone}
               addTarget={p.addTarget}
               onAddTarget={(t) => (typeof t === 'number' ? addChild(t) : p.setAddTarget(t))}
             />

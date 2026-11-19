@@ -3,11 +3,15 @@ import {
   LEVEL_LABELS,
   PRIORITIES,
   PRIORITY_LABELS,
+  RECURRENCES,
+  RECURRENCE_LABELS,
+  RECURRING_LEVELS,
   STATUSES,
   STATUS_LABELS,
   childLevel,
   parentLevel,
   type Priority,
+  type Recurrence,
   type Status,
   type TaskNode
 } from '@shared/db/model.ts'
@@ -123,9 +127,13 @@ export function DetailPanel({ node, index, onClose, onSelect, onAddChild }: Prop
             value={node.status}
             onChange={(e) => {
               const status = e.target.value as Status
-              if (status === 'done' && node.leafCount - node.leafDone > 0 && node.children.length > 0) {
-                const cascade = window.confirm('Also mark all open sub-items as done?')
-                void forge.setDone(node.id, true, cascade)
+              if (status === 'done') {
+                const cascade =
+                  !node.recurrence &&
+                  node.children.length > 0 &&
+                  node.leafCount - node.leafDone > 0 &&
+                  window.confirm('Also mark all open sub-items as done?')
+                void forge.complete(node, cascade)
               } else {
                 void forge.updateTask(node.id, { status })
               }
@@ -171,6 +179,24 @@ export function DetailPanel({ node, index, onClose, onSelect, onAddChild }: Prop
             )}
           </div>
         </label>
+        {RECURRING_LEVELS.includes(node.level) && (
+          <label className="field">
+            <span>Repeats</span>
+            <select
+              value={node.recurrence ?? ''}
+              onChange={(e) =>
+                void forge.updateTask(node.id, { recurrence: (e.target.value || null) as Recurrence | null })
+              }
+            >
+              <option value="">Never</option>
+              {RECURRENCES.map((r) => (
+                <option key={r} value={r}>
+                  {RECURRENCE_LABELS[r]}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         {parentLvl && (
           <label className="field">
             <span>Parent {LEVEL_LABELS[parentLvl].toLowerCase()}</span>
@@ -187,6 +213,14 @@ export function DetailPanel({ node, index, onClose, onSelect, onAddChild }: Prop
           </label>
         )}
       </div>
+
+      {node.recurrence && (
+        <p className="recur-hint muted">
+          Completing this logs the occurrence to Completed and moves the deadline to the next{' '}
+          {node.recurrence === 'weekly' ? 'week' : node.recurrence === 'weekdays' ? 'weekday' : 'day'}
+          {node.children.length > 0 ? '; its sub-items reset each time.' : '.'}
+        </p>
+      )}
 
       <label className="field">
         <span>Description</span>

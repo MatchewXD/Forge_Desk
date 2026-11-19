@@ -1,15 +1,43 @@
 import {
   LEVEL_LABELS,
   PRIORITY_LABELS,
+  RECURRENCE_LABELS,
   STATUS_LABELS,
   type Level,
   type Priority,
+  type Recurrence,
   type Status
 } from '@shared/db/model.ts'
 import { deadlineInfo, pct } from '../lib'
 
 export function LevelTag({ level }: { level: Level }): React.JSX.Element {
   return <span className={`level-tag level-${level}`}>{LEVEL_LABELS[level]}</span>
+}
+
+export function RecurrenceTag({
+  recurrence,
+  compact
+}: {
+  recurrence: Recurrence | null
+  /** Icon only (label in tooltip) */
+  compact?: boolean
+}): React.JSX.Element | null {
+  if (!recurrence) return null
+  return (
+    <span className={`recur-tag${compact ? ' compact' : ''}`} title={`Repeats ${RECURRENCE_LABELS[recurrence].toLowerCase()}`}>
+      <svg viewBox="0 0 16 16" width="11" height="11" aria-hidden>
+        <path
+          d="M13 6.5A5 5 0 0 0 3.6 5M3 9.5A5 5 0 0 0 12.4 11M3.4 2.5V5.2H6M12.6 13.5V10.8H10"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.6"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+      {!compact && RECURRENCE_LABELS[recurrence]}
+    </span>
+  )
 }
 
 export function PriorityDot({ priority }: { priority: Priority }): React.JSX.Element {

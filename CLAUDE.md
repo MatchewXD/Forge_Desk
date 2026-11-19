@@ -32,7 +32,7 @@ src/
   mcp/server.ts     MCP server (stdio). Seven tools, each a thin wrapper over TaskRepository
   main/             Electron main process: window, IPC handlers -> TaskRepository, external-change watcher
   preload/          contextBridge exposing a typed `window.forge` API
-  renderer/         React UI (sidebar, Tasks tree, Today screen, detail panel)
+  renderer/         React UI (sidebar, Tasks tree, Today screen, Completed archive, detail panel)
 scripts/            Node scripts (e.g. db-smoke.ts) run directly with Node's type stripping
 ```
 
@@ -56,9 +56,25 @@ Single `tasks` table, self-referencing via `parent_id` (cascade delete).
 | task | 3 | milestone |
 | microtask | 4 | task (leaf; cannot have children) |
 
-Every item has: `title`, `description`, `status` (`todo` / `in_progress` / `blocked` / `done`), `deadline` (nullable date), `priority` (`low` / `medium` / `high` / `urgent`), plus `sort_order`, `created_at`, `updated_at`, `completed_at`.
+Every item has: `title`, `description`, `status` (`todo` / `in_progress` / `blocked` / `done`), `deadline` (nullable date), `priority` (`low` / `medium` / `high` / `urgent`), `recurrence` (nullable: `daily` / `weekdays` / `weekly`), plus `sort_order`, `created_at`, `updated_at`, `completed_at`.
 
-**Progress roll-up:** a leaf is 100% if `done`, else 0%. A parent's progress is the average of its children's progress (recursively). Computed in `repository.ts` (`getTree`) so every client sees the same numbers.
+`task_completions` (task_id → tasks, cascade delete; `occurrence_date`, `completed_at`) logs each completed occurrence of a recurring task.
+
+**Progress roll-up:** a leaf is 100% if `done`, else 0%. A parent's progress is the average of its children's progress (recursively). Computed in `repository.ts` (`getTree`) on the **full** tree, so filtered views show the same numbers.
+
+**Views (`getTree(rootId, view)`):**
+- `active` (Tasks page) — never shows done items. A done item appears only as greyed context (`isContext`) if it still has open descendants.
+- `completed` (Completed page) — done items plus recurring tasks that have logged completions (with `completions[]`), in their original hierarchy; open ancestors are included as greyed context.
+- `all` — everything (default; MCP `list_tasks`).
+
+**Completing and reopening:**
+- Completing a normal item sets `done` + `completed_at` (optionally cascading to descendants); it moves from the Tasks tree to the Completed archive.
+- Reopening (`reopenTask`, or any status change from `done` to something else) also reopens its **done ancestors**, so the item reappears in the active tree under its original parents. Descendants stay as they are.
+
+**Recurring tasks:**
+- Only `task` and `microtask` levels may repeat. Setting a recurrence without a deadline makes the first occurrence due today (next weekday for `weekdays`).
+- Completing one (`completeTask`, or `updateTask` with `status: 'done'`) inserts a `task_completions` row, resets the task and its sub-items to `todo`, and moves the deadline to `nextOccurrence()` in `dates.ts`. That steps forward by the rule until the date is after today, so a missed streak isn't immediately overdue again, and weekly keeps the same weekday. A recurring task never stays `done`. To end it, set `recurrence: null` and then complete it.
+- It shows on Today by its current deadline like any other item.
 
 **Database location:** `%APPDATA%\ForgeDesk\forge-desk.db` by default; override with the `FORGE_DESK_DB` environment variable (use this for tests and for pointing the MCP server at the same file).
 
@@ -74,12 +90,12 @@ Every item has: `title`, `description`, `status` (`todo` / `in_progress` / `bloc
 A stdio MCP server (`src/mcp/server.ts`, `@modelcontextprotocol/sdk` + `zod`) so Claude can manage the task board. It imports `src/shared/db` and opens the **same SQLite file** as the app (`%APPDATA%\ForgeDesk\forge-desk.db`, or `FORGE_DESK_DB`).
 
 Tools (thin wrappers over `TaskRepository` — no logic of their own; tool args are snake_case):
-- `list_tasks` — flat list filtered by parent_id / level / status / due_before / include_done, or `tree: true` (optionally `root_id`) for the nested tree with progress
-- `get_task` — one item with progress, its ancestors and its subtree (`repo.getTaskDetail`)
-- `create_task` — title, parent_id, level, description, status, deadline, priority
-- `update_task` — patch title / description / status / deadline / priority
+- `list_tasks` — flat list filtered by parent_id / level / status / due_before / include_done, or `tree: true` (optionally `root_id`, `view: all|active|completed`) for the nested tree with progress
+- `get_task` — one item with progress, its ancestors, its subtree and its completion log (`repo.getTaskDetail`)
+- `create_task` — title, parent_id, level, description, status, deadline, priority, recurrence
+- `update_task` — patch title / description / status / deadline / priority / recurrence (null stops repeating)
 - `move_task` — new_parent_id and/or index (validated against level rules)
-- `complete_task` — mark done, optionally `cascade` to descendants
+- `complete_task` — mark done, optionally `cascade` to descendants; on a recurring task, logs the occurrence and returns it with the next deadline
 - `get_today` — overdue / due today / next N days (same query as the Today screen)
 
 How it fits together:
@@ -96,6 +112,11 @@ Registration:
       "command": "C:\\Program Files\\nodejs\\node.exe",
       "args": ["E:\\Coding\\Forge_Desk\\src\\mcp\\server.ts"] } } }
   ```
+
+### Phase 1.6 — Completed archive + recurring tasks (done)
+- Tasks tree and Today never show done items; sidebar **Completed** page shows them in their original hierarchy with greyed open ancestors, completion dates, and Reopen
+- Recurring tasks (daily / weekdays / weekly) on task and micro-task levels: completing logs the occurrence to the archive and rolls the deadline forward; exposed via MCP `create_task` / `update_task`
+- Schema migration 2: `tasks.recurrence`, `task_completions`
 
 ### Phase 2 — Kanban + timeline views (planned)
 - Kanban board grouped by status, filterable by vision/project, drag to change status

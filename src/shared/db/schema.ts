@@ -20,6 +20,18 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX idx_tasks_parent   ON tasks(parent_id, sort_order);
   CREATE INDEX idx_tasks_deadline ON tasks(deadline) WHERE deadline IS NOT NULL;
+  `,
+  // 2: recurring tasks + completion log for their occurrences
+  `
+  ALTER TABLE tasks ADD COLUMN recurrence TEXT
+    CHECK (recurrence IS NULL OR recurrence IN ('daily','weekdays','weekly'));
+  CREATE TABLE task_completions (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id          INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    occurrence_date  TEXT,
+    completed_at     TEXT NOT NULL
+  );
+  CREATE INDEX idx_completions_task ON task_completions(task_id, completed_at);
   `
 ]
 
