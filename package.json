@@ -12,7 +12,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "test:db": "node scripts/db-smoke.ts",
     "mcp": "node src/mcp/server.ts",
-    "test:mcp": "node scripts/mcp-smoke.ts"
+    "test:mcp": "node scripts/mcp-smoke.ts",
+    "install:next-task": "node scripts/install-next-task.ts"
   },
   "devDependencies": {
     "@types/node": "^26.6.6",

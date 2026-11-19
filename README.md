@@ -19,7 +19,8 @@ npm run typecheck
 
 `src/mcp/server.ts` exposes `list_tasks`, `get_task`, `create_task`, `update_task`, `move_task`, `complete_task` and `get_today` over stdio, against the same database as the app. Changes appear in the running app within ~2 seconds.
 
-- **Claude Code:** already registered for this project in `.mcp.json` — approve it when prompted.
+- **Claude Code:** register it once at user scope so it's available in every repo:
+  `claude mcp add --scope user forge-desk -e FORGE_DESK_AGENT=claude-code -- node E:/Coding/Forge_Desk/src/mcp/server.ts`
 - **Claude Desktop:** add to `%APPDATA%\Claude\claude_desktop_config.json` and restart the app:
 
 ```json
@@ -37,7 +38,8 @@ Data is stored in `%APPDATA%\ForgeDesk\forge-desk.db` (override with the `FORGE_
 
 ## Handing work to Claude Code
 
+0. One-time setup: `npm run install:next-task` (installs `/next-task` for all repos), register the MCP server at user scope (above), and in Forge Desk set the **Repo path** of each project you want Claude Code to work on (select the project, detail panel). The repo needs a `CLAUDE.md` that names its build/test commands.
 1. In Forge Desk, set an item's **Assignee** to *Claude Code* and write the spec in its description and notes.
-2. In Claude Code in this repo, run `/next-task` (or `/next-task <id>`). It needs the `forge-desk` MCP server approved (`/mcp`) and a clean working tree.
+2. In Claude Code, in that project's repo, run `/next-task` (or `/next-task <id>`). It needs a clean working tree.
 3. Claude builds the highest-priority item on a `claude/task-<id>-…` branch, runs the tests, commits, writes a report note on the item and sets it to **Review**.
 4. Read the note in the detail panel, check the branch, then mark the item done, or add a note and set it back to *To do*.

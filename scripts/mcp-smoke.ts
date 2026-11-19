@@ -122,6 +122,21 @@ try {
   assert.equal((await call('update_task', { id: handoff.id, assignee: 'me' })).assignee, 'me')
   await assert.rejects(call('add_note', { id: 9999, text: 'x' }), /not found/)
 
+  // repo_path on projects + scoping by project (what /next-task uses)
+  assert.equal((await call('update_task', { id: project.id, repo_path: 'E:\\Coding\\Some_Repo' })).repoPath, 'E:\\Coding\\Some_Repo')
+  const found = await call('list_tasks', { repo_path: 'E:/coding/some_repo' })
+  assert.deepEqual(found.map((t: any) => t.id), [project.id])
+  assert.equal((await call('get_task', { id: project.id })).task.repoPath, 'E:\\Coding\\Some_Repo')
+  const proj2 = await call('create_task', { title: 'Second', parent_id: vision.id, repo_path: '/e/Coding/Other' })
+  assert.equal(proj2.repoPath, '/e/Coding/Other')
+  assert.deepEqual((await call('list_tasks', { repo_path: 'E:\\Coding\\Other\\' })).map((t: any) => t.id), [proj2.id])
+  await assert.rejects(call('update_task', { id: ms1.id, repo_path: 'E:\\x' }), /Only projects have a repo path/)
+  await assert.rejects(call('update_task', { id: proj2.id, repo_path: 'e:/coding/some_repo' }), /already used/)
+  const scoped = await call('list_tasks', { under_id: project.id, assignee: 'me', status: 'todo' })
+  assert.ok(scoped.length > 0 && scoped.every((t: any) => t.assignee === 'me'))
+  assert.deepEqual(await call('list_tasks', { under_id: proj2.id }), [])
+  assert.equal((await call('update_task', { id: proj2.id, repo_path: null })).repoPath, null)
+
   // Repository rules surface as tool errors
   await assert.rejects(call('create_task', { title: 'Bad', parent_id: vision.id, level: 'task' }), /must be a project/)
   await assert.rejects(call('move_task', { id: task.id, new_parent_id: project.id }), /only be moved under a milestone/)

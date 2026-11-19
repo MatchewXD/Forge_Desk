@@ -78,6 +78,10 @@ const MIGRATIONS: string[] = [
   CREATE TRIGGER task_notes_no_delete BEFORE DELETE ON task_notes
   WHEN EXISTS (SELECT 1 FROM tasks WHERE id = OLD.task_id)
   BEGIN SELECT RAISE(ABORT, 'Notes are append-only'); END;
+  `,
+  // 4: local git repo of a project, so /next-task can find "this repo's" work.
+  `
+  ALTER TABLE tasks ADD COLUMN repo_path TEXT;
   `
 ]
 

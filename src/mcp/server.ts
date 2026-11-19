@@ -51,6 +51,13 @@ const priority = z.enum(PRIORITIES)
 const assignee = z
   .enum(ASSIGNEES)
   .describe("Who does the work: 'me' (the user), 'claude-code' (Claude Code in the repo) or 'claude' (Claude chat)")
+const repoPath = z
+  .string()
+  .nullable()
+  .describe(
+    "Projects only: absolute path of the project's local git repo (e.g. E:\\Coding\\My_Repo). /next-task " +
+      "uses it to find the project for the repo it runs in. null or '' clears it; two projects can't share one."
+  )
 const recurrence = z
   .enum(RECURRENCES)
   .nullable()
@@ -85,7 +92,16 @@ server.registerTool(
       level: level.optional(),
       status: z.union([status, z.array(status)]).optional(),
       due_before: date.optional().describe('Only items with a deadline on or before this date'),
-      include_done: z.boolean().optional().describe('Include done items (default true)')
+      include_done: z.boolean().optional().describe('Include done items (default true)'),
+      under_id: id.optional().describe('Only descendants of this item, at any depth (e.g. everything in a project)'),
+      repo_path: z
+        .string()
+        .min(1)
+        .optional()
+        .describe(
+          'Only the project whose repo_path is this local repo (slashes, case and a trailing slash are ' +
+            'ignored, so `git rev-parse --show-toplevel` output matches)'
+        )
     },
     annotations: { readOnlyHint: true }
   },
@@ -99,7 +115,9 @@ server.registerTool(
             status: a.status,
             dueOnOrBefore: a.due_before,
             includeDone: a.include_done,
-            assignee: a.assignee
+            assignee: a.assignee,
+            underId: a.under_id,
+            repoPath: a.repo_path
           })
     )
 )
@@ -135,7 +153,8 @@ server.registerTool(
       deadline: date.nullable().optional(),
       priority: priority.optional().describe('Default medium'),
       recurrence: recurrence.optional(),
-      assignee: assignee.optional().describe("Default 'me'")
+      assignee: assignee.optional().describe("Default 'me'"),
+      repo_path: repoPath.optional()
     }
   },
   (a) =>
@@ -149,7 +168,8 @@ server.registerTool(
         deadline: a.deadline,
         priority: a.priority,
         recurrence: a.recurrence,
-        assignee: a.assignee
+        assignee: a.assignee,
+        repoPath: a.repo_path
       })
     )
 )
@@ -172,10 +192,11 @@ server.registerTool(
       deadline: date.nullable().optional(),
       priority: priority.optional(),
       recurrence: recurrence.optional(),
-      assignee: assignee.optional()
+      assignee: assignee.optional(),
+      repo_path: repoPath.optional()
     }
   },
-  ({ id, ...patch }) => run(() => repo.updateTask(id, patch))
+  ({ id, repo_path, ...patch }) => run(() => repo.updateTask(id, { ...patch, repoPath: repo_path }))
 )
 
 server.registerTool(
