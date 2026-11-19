@@ -35,12 +35,14 @@ export function DetailPanel({ node, index, onClose, onSelect, onAddChild }: Prop
   const forge = useForge()
   const [title, setTitle] = useState(node.title)
   const [description, setDescription] = useState(node.description)
+  const [repoPath, setRepoPath] = useState(node.repoPath ?? '')
 
   // Resync local edits when another item is selected or the item changes underneath us.
   useEffect(() => {
     setTitle(node.title)
     setDescription(node.description)
-  }, [node.id, node.title, node.description])
+    setRepoPath(node.repoPath ?? '')
+  }, [node.id, node.title, node.description, node.repoPath])
 
   const ancestors = ancestorIds(index, node.id).map((id) => index.get(id)!.node)
   const parentLvl = parentLevel(node.level)
@@ -70,6 +72,14 @@ export function DetailPanel({ node, index, onClose, onSelect, onAddChild }: Prop
   }
   const saveDescription = (): void => {
     if (description !== node.description) void forge.updateTask(node.id, { description })
+  }
+  const saveRepoPath = (): void => {
+    const next = repoPath.trim() || null
+    if (next === (node.repoPath ?? null)) return
+    // On a rejected path (e.g. already used by another project) show the stored value again.
+    void forge.updateTask(node.id, { repoPath: next }).then((ok) => {
+      if (!ok) setRepoPath(node.repoPath ?? '')
+    })
   }
 
   const remove = (): void => {
@@ -230,6 +240,24 @@ export function DetailPanel({ node, index, onClose, onSelect, onAddChild }: Prop
           </label>
         )}
       </div>
+
+      {node.level === 'project' && (
+        <label className="field">
+          <span>Repo path</span>
+          <input
+            type="text"
+            spellCheck={false}
+            placeholder="e.g. E:\Coding\My_Repo (for /next-task in Claude Code)"
+            value={repoPath}
+            onChange={(e) => setRepoPath(e.target.value)}
+            onBlur={saveRepoPath}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+              if (e.key === 'Escape') setRepoPath(node.repoPath ?? '')
+            }}
+          />
+        </label>
+      )}
 
       {node.recurrence && (
         <p className="recur-hint muted">

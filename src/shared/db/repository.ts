@@ -36,6 +36,7 @@ interface TaskRow {
   priority: Priority
   recurrence: Recurrence | null
   assignee: Assignee
+  repo_path: string | null
   sort_order: number
   created_at: string
   updated_at: string
@@ -76,6 +77,7 @@ function toTask(r: TaskRow): Task {
     priority: r.priority,
     recurrence: r.recurrence ?? null,
     assignee: r.assignee ?? 'me',
+    repoPath: r.repo_path ?? null,
     sortOrder: r.sort_order,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
@@ -147,11 +149,24 @@ export class TaskRepository {
       where.push('deadline IS NOT NULL AND deadline <= ?')
       params.push(filter.dueOnOrBefore)
     }
+    if (filter.underId !== undefined) {
+      where.push(
+        `id IN (WITH RECURSIVE sub(id) AS (
+           SELECT id FROM tasks WHERE parent_id = ?
+           UNION ALL SELECT t.id FROM tasks t JOIN sub ON t.parent_id = sub.id
+         ) SELECT id FROM sub)`
+      )
+      params.push(filter.underId)
+    }
+    if (filter.repoPath !== undefined) where.push("level = 'project' AND repo_path IS NOT NULL")
     const sql =
       'SELECT * FROM tasks' +
       (where.length ? ` WHERE ${where.join(' AND ')}` : '') +
       ' ORDER BY parent_id, sort_order, id'
-    return (this.db.prepare(sql).all(...params) as unknown as TaskRow[]).map(toTask)
+    const tasks = (this.db.prepare(sql).all(...params) as unknown as TaskRow[]).map(toTask)
+    if (filter.repoPath === undefined) return tasks
+    const wanted = normalizeRepoPath(filter.repoPath)
+    return tasks.filter((t) => normalizeRepoPath(t.repoPath!) === wanted)
   }
 
   /** Logged occurrences of recurring tasks, newest first (optionally for one task). */
@@ -307,6 +322,7 @@ export class TaskRepository {
     const assignee = input.assignee ?? 'me'
     validateFields({ status, priority, deadline: input.deadline, recurrence, assignee })
     validateRecurrence(level, recurrence)
+    const repoPath = this.checkRepoPath(level, input.repoPath)
     let deadline = input.deadline ?? null
     if (recurrence && !deadline) deadline = firstOccurrence(recurrence, toLocalDateString())
 
@@ -318,8 +334,9 @@ export class TaskRepository {
       const result = this.db
         .prepare(
           `INSERT INTO tasks (parent_id, level, title, description, status, deadline, priority,
-                              recurrence, assignee, sort_order, created_at, updated_at, completed_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+                              recurrence, assignee, repo_path, sort_order, created_at, updated_at,
+                              completed_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .run(
           parentId,
@@ -331,6 +348,7 @@ export class TaskRepository {
           priority,
           recurrence,
           assignee,
+          repoPath,
           next.n,
           now,
           now,
@@ -378,6 +396,13 @@ export class TaskRepository {
     if (patch.assignee !== undefined) {
       sets.push('assignee = ?')
       params.push(patch.assignee)
+    }
+    if (patch.repoPath !== undefined) {
+      const repoPath = this.checkRepoPath(current.level, patch.repoPath, id)
+      if (repoPath !== current.repoPath) {
+        sets.push('repo_path = ?')
+        params.push(repoPath)
+      }
     }
     let deadline = patch.deadline !== undefined ? patch.deadline || null : current.deadline
     if (patch.recurrence !== undefined) {
@@ -547,6 +572,20 @@ export class TaskRepository {
       .run(id, now, id)
   }
 
+  /**
+   * Validates a repo_path for an item of `level` and returns the value to store (trimmed, or
+   * null to clear). Only projects have one, and two projects can't claim the same repo —
+   * /next-task must resolve a repo to exactly one project.
+   */
+  private checkRepoPath(level: Level, value: string | null | undefined, selfId?: number): string | null {
+    const repoPath = value?.trim() || null
+    if (repoPath === null) return null
+    if (level !== 'project') throw new TaskError(`Only projects have a repo path, not a ${level}`)
+    const clash = this.listTasks({ repoPath }).find((t) => t.id !== selfId)
+    if (clash) throw new TaskError(`Repo path is already used by project ${clash.id} "${clash.title}"`)
+    return repoPath
+  }
+
   private requireTask(id: number): Task {
     const t = this.getTask(id)
     if (!t) throw new TaskError(`Task ${id} not found`)
@@ -608,6 +647,19 @@ function validateRecurrence(level: Level, recurrence: Recurrence | null | undefi
   if (recurrence && !RECURRING_LEVELS.includes(level)) {
     throw new TaskError(`Only tasks and micro-tasks can repeat, not a ${level}`)
   }
+}
+
+/**
+ * Comparable form of a repo path: forward slashes, no trailing slash, Git Bash `/e/...` turned
+ * into `e:/...`, and case-folded on Windows. Stored values keep the user's spelling.
+ */
+export function normalizeRepoPath(p: string): string {
+  let s = p.trim().replace(/\\/g, '/')
+  const msys = /^\/([a-zA-Z])(\/|$)/.exec(s)
+  if (msys) s = `${msys[1]}:/${s.slice(3)}`
+  s = s.replace(/\/+$/, '')
+  if (/^[a-zA-Z]:$/.test(s)) s += '/'
+  return process.platform === 'win32' || /^[a-zA-Z]:/.test(s) ? s.toLowerCase() : s
 }
 
 function validateFields(f: {

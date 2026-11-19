@@ -79,6 +79,8 @@ export interface Task {
   /** Set on recurring tasks: completing one logs a Completion and rolls the deadline forward. */
   recurrence: Recurrence | null
   assignee: Assignee
+  /** Project level only: absolute path of the project's local git repo (used by /next-task). */
+  repoPath: string | null
   sortOrder: number
   createdAt: string
   updatedAt: string
@@ -144,6 +146,8 @@ export interface CreateTaskInput {
   recurrence?: Recurrence | null
   /** Default 'me' */
   assignee?: Assignee
+  /** Project level only */
+  repoPath?: string | null
 }
 
 export interface UpdateTaskInput {
@@ -154,6 +158,8 @@ export interface UpdateTaskInput {
   priority?: Priority
   recurrence?: Recurrence | null
   assignee?: Assignee
+  /** Project level only; null or '' clears it */
+  repoPath?: string | null
 }
 
 export interface ListTasksFilter {
@@ -163,6 +169,10 @@ export interface ListTasksFilter {
   dueOnOrBefore?: string
   includeDone?: boolean
   assignee?: Assignee
+  /** Only descendants of this item (any depth) */
+  underId?: number
+  /** Only the project whose repo_path matches this path (normalized: slashes, case, trailing slash) */
+  repoPath?: string
 }
 
 export function levelIndex(level: Level): number {

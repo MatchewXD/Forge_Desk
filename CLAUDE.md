@@ -18,6 +18,7 @@ A personal Windows desktop app for managing all of my projects in one place: lon
 - `npm run test:mcp` — end-to-end test of the MCP server over stdio (spawns it, calls every tool) against a temp database
 - `npm run mcp` — run the MCP server on stdio (normally launched by Claude, not by hand)
 - `npm run dist` — build the Windows installer: `dist/Forge-Desk-Setup-<version>.exe` (unpacked app in `dist/win-unpacked/`)
+- `npm run install:next-task` — install/refresh the user-level `/next-task` command (`~/.claude/commands/next-task.md`) from `tools/claude-code/next-task.md`
 
 ## Layout
 
@@ -30,12 +31,13 @@ src/
     connection.ts   openDatabase(), defaultDbPath() (WAL + busy_timeout for multi-process use)
     repository.ts   TaskRepository: all reads/writes and business rules
     index.ts        Public entry point (Node-only: pulls in node:sqlite)
-  mcp/server.ts     MCP server (stdio). Seven tools, each a thin wrapper over TaskRepository
+  mcp/server.ts     MCP server (stdio). Nine tools, each a thin wrapper over TaskRepository
   main/             Electron main process: window, IPC handlers -> TaskRepository, external-change watcher
   preload/          contextBridge exposing a typed `window.forge` API
   renderer/         React UI (sidebar, Tasks tree, Today screen, Completed archive, detail panel)
 scripts/            Node scripts (e.g. db-smoke.ts) run directly with Node's type stripping
-.claude/commands/   Project slash commands — next-task.md (the Claude Code handoff, see below)
+tools/claude-code/  Source of the user-level /next-task command (installed to ~/.claude/commands by
+                    `npm run install:next-task`; there is deliberately no project-level copy)
 build/              App icon: icon-source.png (original art), icon.png (1024, transparent corners),
                     icon.ico (16/24/32/48/64/128/256). Also electron-builder's buildResources dir.
 electron-builder.yml  Windows installer config (NSIS, per-user) — `npm run dist`
@@ -63,13 +65,13 @@ Single `tasks` table, self-referencing via `parent_id` (cascade delete).
 | task | 3 | milestone |
 | microtask | 4 | task (leaf; cannot have children) |
 
-Every item has: `title`, `description`, `status` (`todo` / `in_progress` / `blocked` / `review` / `done`; `review` = work finished, waiting for the user to check it, still counts as open), `deadline` (nullable date), `priority` (`low` / `medium` / `high` / `urgent`), `recurrence` (nullable: `daily` / `weekdays` / `weekly`), `assignee` (`me` default / `claude-code` / `claude`), plus `sort_order`, `created_at`, `updated_at`, `completed_at`.
+Every item has: `title`, `description`, `status` (`todo` / `in_progress` / `blocked` / `review` / `done`; `review` = work finished, waiting for the user to check it, still counts as open), `deadline` (nullable date), `priority` (`low` / `medium` / `high` / `urgent`), `recurrence` (nullable: `daily` / `weekdays` / `weekly`), `assignee` (`me` default / `claude-code` / `claude`), `repo_path` (projects only, nullable: the project's local git repo, used by `/next-task`; matched with `normalizeRepoPath()` — slashes, case, trailing slash and Git Bash `/e/...` form are ignored — and unique across projects), plus `sort_order`, `created_at`, `updated_at`, `completed_at`.
 
 `task_completions` (task_id → tasks, cascade delete; `occurrence_date`, `completed_at`) logs each completed occurrence of a recurring task.
 
 `task_notes` (task_id → tasks, cascade delete; `created_at`, `author` (same values as assignee), `text`) is an **append-only** log per item: `addNote` / `listNotes` only, and triggers reject UPDATE and DELETE except the cascade when the item itself is deleted.
 
-**Migrations:** `migrate()` turns foreign keys off while migrations run (so a migration can rebuild a table — SQLite can't alter a CHECK), runs `foreign_key_check` before each commit, and re-reads `user_version` under the write lock because the app and the MCP server may start at the same time. Migration 3 rebuilds `tasks` this way.
+**Migrations:** `migrate()` turns foreign keys off while migrations run (so a migration can rebuild a table — SQLite can't alter a CHECK), runs `foreign_key_check` before each commit, and re-reads `user_version` under the write lock because the app and the MCP server may start at the same time. Migration 3 rebuilds `tasks` this way; migration 4 adds `repo_path`.
 
 **Progress roll-up:** a leaf is 100% if `done`, else 0%. A parent's progress is the average of its children's progress (recursively). Computed in `repository.ts` (`getTree`) on the **full** tree, so filtered views show the same numbers.
 
@@ -101,10 +103,10 @@ Every item has: `title`, `description`, `status` (`todo` / `in_progress` / `bloc
 A stdio MCP server (`src/mcp/server.ts`, `@modelcontextprotocol/sdk` + `zod`) so Claude can manage the task board. It imports `src/shared/db` and opens the **same SQLite file** as the app (`%APPDATA%\ForgeDesk\forge-desk.db`, or `FORGE_DESK_DB`).
 
 Tools (thin wrappers over `TaskRepository` — no logic of their own; tool args are snake_case):
-- `list_tasks` — flat list filtered by parent_id / level / status / due_before / include_done / assignee, or `tree: true` (optionally `root_id`, `view: all|active|completed`) for the nested tree with progress
+- `list_tasks` — flat list filtered by parent_id / level / status / due_before / include_done / assignee / under_id (descendants at any depth) / repo_path (the project linked to a repo), or `tree: true` (optionally `root_id`, `view: all|active|completed`) for the nested tree with progress
 - `get_task` — one item with progress, its ancestors, its subtree, its notes and its completion log (`repo.getTaskDetail`)
-- `create_task` — title, parent_id, level, description, status, deadline, priority, recurrence, assignee
-- `update_task` — patch title / description / status / deadline / priority / recurrence (null stops repeating) / assignee
+- `create_task` — title, parent_id, level, description, status, deadline, priority, recurrence, assignee, repo_path (projects)
+- `update_task` — patch title / description / status / deadline / priority / recurrence (null stops repeating) / assignee / repo_path (projects; null clears)
 - `add_note` — append a note (author defaults to the server's agent, `FORGE_DESK_AGENT`, else `claude`)
 - `list_notes` — an item's notes, oldest first
 - `move_task` — new_parent_id and/or index (validated against level rules)
@@ -118,7 +120,7 @@ How it fits together:
 - New tool? Put the logic in `TaskRepository` first, then add a wrapper here, and cover it in `scripts/mcp-smoke.ts`.
 
 Registration:
-- Claude Code: project-scoped in `.mcp.json` (`claude mcp add --scope project forge-desk -e FORGE_DESK_AGENT=claude-code -- node E:/Coding/Forge_Desk/src/mcp/server.ts`). `FORGE_DESK_AGENT` makes Claude Code's notes show as "Claude Code".
+- Claude Code: **user scope**, so it's available in every repo (`claude mcp add --scope user forge-desk -e FORGE_DESK_AGENT=claude-code -- node E:/Coding/Forge_Desk/src/mcp/server.ts`; stored in `~/.claude.json`). There is deliberately **no `.mcp.json`** in this repo: a same-named project entry would shadow the user one here and give two configs to keep in sync. `FORGE_DESK_AGENT` makes Claude Code's notes show as "Claude Code". The server runs from this checkout, so it uses whatever branch is checked out here.
 - Claude Desktop: add to `%APPDATA%\Claude\claude_desktop_config.json`:
   ```json
   { "mcpServers": { "forge-desk": {
@@ -134,7 +136,7 @@ Registration:
 ### Phase 1.7 — Claude Code handoff (done)
 Queue work for Claude Code from the app, have it built on a branch, review the result.
 1. In Forge Desk, create an item, set **Assignee: Claude Code**, write the spec in the description (and notes).
-2. In Claude Code (in this repo) run **`/next-task`** (or `/next-task <id>`). It needs the `forge-desk` MCP server enabled and a clean working tree. It picks the highest-priority `todo` item assigned to `claude-code` (then earliest deadline, then lowest id), sets it `in_progress`, implements it on `claude/task-<id>-<slug>` from `main`, runs typecheck / test:db / test:mcp / build, commits (no push or merge), adds a report note (what was built, branch and commit, how to test, what needs the user), and sets the status to `review`. If the spec is unclear or the checks keep failing, it adds a note and sets the status to `blocked` instead. If nothing is queued, it says so and stops.
+2. In Claude Code, in the project's repo (see Phase 1.8), run **`/next-task`** (or `/next-task <id>`). It needs the `forge-desk` MCP server enabled and a clean working tree. It picks the highest-priority `todo` item assigned to `claude-code` (then earliest deadline, then lowest id), sets it `in_progress`, implements it on `claude/task-<id>-<slug>` from `main`, runs typecheck / test:db / test:mcp / build, commits (no push or merge), adds a report note (what was built, branch and commit, how to test, what needs the user), and sets the status to `review`. If the spec is unclear or the checks keep failing, it adds a note and sets the status to `blocked` instead. If nothing is queued, it says so and stops.
 3. Review the branch, then mark the item done (or add a note and set it back to `todo`).
 
 Data/UI: `assignee` field and filter (Tasks page), `review` status, append-only notes in the detail panel; MCP `add_note` / `list_notes` and `assignee` on create/update/list.
@@ -147,6 +149,13 @@ Data/UI: `assignee` field and filter (Tasks page), `review` status, append-only 
 - `electronDist` reuses `node_modules/electron/dist`, so builds don't re-download Electron.
 - **Updating:** bump `version` in package.json, run `npm run dist`, then run the new Setup exe over the old install. The same `appId` makes it an in-place upgrade. There is no auto-update.
 - Unsigned: Windows SmartScreen shows "Windows protected your PC" on first run; click *More info › Run anyway*.
+
+### Phase 1.8 — /next-task in every repo (done)
+- `/next-task` is a **user-level** command (`~/.claude/commands/next-task.md`, source `tools/claude-code/next-task.md`, install with `npm run install:next-task`), and the `forge-desk` MCP server is registered at user scope, so it works in any repo.
+- It's **repo-aware**: it resolves `git rev-parse --show-toplevel` to the project whose **Repo path** matches (`list_tasks { repo_path }`), and only picks `todo` claude-code items under that project (`list_tasks { under_id }`). If no project is linked, it says so and stops. It branches from the repo's base branch (`origin/HEAD`, else `main`, else `master`).
+- It's **generic**: build/test commands come from the repo's CLAUDE.md. If a repo has no CLAUDE.md, or the file names no verification commands, it notes that on the item and sets it `blocked` without creating a branch.
+- Link a project: select it in Forge Desk and fill in **Repo path** (detail panel, projects only), or `update_task { id, repo_path }`. The Forge Desk project is linked to `E:\Coding\Forge_Desk`.
+- Test commands from other repos aren't pre-approved in the command, so Claude Code asks permission the first time it runs them in a repo.
 
 ### Phase 2 — Kanban + timeline views (planned)
 - Kanban board grouped by status, filterable by vision/project, drag to change status

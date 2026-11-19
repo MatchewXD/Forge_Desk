@@ -13,6 +13,7 @@ import {
   firstOccurrence,
   nextOccurrence,
   toLocalDateString,
+  normalizeRepoPath,
   type TaskNode
 } from '../src/shared/db/index.ts'
 
@@ -191,6 +192,33 @@ try {
   // ...but deleting the item removes its notes with it
   repo.deleteTask(forClaude.id)
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM task_notes').get()!.n, 0)
+
+  // ---------- repo_path (project level) ----------
+  assert.equal(normalizeRepoPath('E:\\Coding\\Forge_Desk\\'), 'e:/coding/forge_desk')
+  assert.equal(normalizeRepoPath('/e/Coding/Forge_Desk'), 'e:/coding/forge_desk') // Git Bash style
+  assert.equal(normalizeRepoPath('E:/Coding/Forge_Desk'), 'e:/coding/forge_desk') // git rev-parse style
+  assert.equal(normalizeRepoPath('E:\\'), 'e:/')
+  assert.equal(repo.createTask({ title: 'No repo' }).repoPath, null)
+  const withRepo = repo.updateTask(p2.id, { repoPath: '  E:\\Coding\\Some_Repo  ' })
+  assert.equal(withRepo.repoPath, 'E:\\Coding\\Some_Repo') // stored as typed (trimmed)
+  assert.deepEqual(repo.listTasks({ repoPath: 'E:/coding/some_repo/' }).map((t) => t.id), [p2.id])
+  assert.deepEqual(repo.listTasks({ repoPath: 'E:/Coding/Other' }), [])
+  assert.throws(() => repo.updateTask(msA.id, { repoPath: 'E:\\x' }), /Only projects have a repo path/)
+  assert.throws(
+    () => repo.createTask({ parentId: v2.id, title: 'Dup', repoPath: '/e/coding/some_repo' }),
+    /already used by project/
+  )
+  const p3 = repo.createTask({ parentId: v2.id, title: 'P3', repoPath: 'E:\\Coding\\Third' })
+  assert.equal(p3.repoPath, 'E:\\Coding\\Third')
+  assert.equal(repo.updateTask(p2.id, { repoPath: 'E:\\Coding\\Some_Repo' }).repoPath, 'E:\\Coding\\Some_Repo') // re-saving own path is fine
+  assert.equal(repo.updateTask(p3.id, { repoPath: '' }).repoPath, null) // '' clears
+  // underId: descendants at any depth (used to scope /next-task to one project)
+  const deep = repo.createTask({ parentId: openTask.id, title: 'Deep micro', assignee: 'claude-code' })
+  assert.deepEqual(
+    repo.listTasks({ underId: p2.id, assignee: 'claude-code' }).map((t) => t.id),
+    [deep.id]
+  )
+  assert.deepEqual(repo.listTasks({ underId: p3.id }), [])
 
   otherDb.close()
   db.close()

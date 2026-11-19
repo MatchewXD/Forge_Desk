@@ -39,7 +39,8 @@ export interface ForgeData {
   dismissNotice: () => void
   refresh: () => Promise<void>
   createTask: (input: CreateTaskInput) => Promise<Task | null>
-  updateTask: (id: number, patch: UpdateTaskInput) => Promise<void>
+  /** Resolves false if the update was rejected (the error is shown as a notice). */
+  updateTask: (id: number, patch: UpdateTaskInput) => Promise<boolean>
   moveTask: (id: number, parentId: number | null, index?: number) => Promise<void>
   /** Complete an item (recurring: log the occurrence and roll forward). Shows a notice with Undo. */
   complete: (task: Task, cascade?: boolean) => Promise<void>
@@ -164,7 +165,7 @@ export function useForgeData(): ForgeData {
     dismissNotice: () => setNotice(null),
     refresh,
     createTask: (input) => run(() => api.createTask(input)),
-    updateTask: async (id, patch) => void (await run(() => api.updateTask(id, patch))),
+    updateTask: async (id, patch) => (await run(() => api.updateTask(id, patch))) !== null,
     moveTask: async (id, parentId, index) => void (await run(() => api.moveTask(id, parentId, index))),
     complete,
     reopen,
