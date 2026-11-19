@@ -75,7 +75,11 @@ export function DetailPanel({ node, index, onClose, onSelect, onAddChild }: Prop
   }
   const saveRepoPath = (): void => {
     const next = repoPath.trim() || null
-    if (next !== (node.repoPath ?? null)) void forge.updateTask(node.id, { repoPath: next })
+    if (next === (node.repoPath ?? null)) return
+    // On a rejected path (e.g. already used by another project) show the stored value again.
+    void forge.updateTask(node.id, { repoPath: next }).then((ok) => {
+      if (!ok) setRepoPath(node.repoPath ?? '')
+    })
   }
 
   const remove = (): void => {
