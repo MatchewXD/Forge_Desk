@@ -12,13 +12,14 @@ export const LEVEL_LABELS: Record<Level, string> = {
   microtask: 'Micro-task'
 }
 
-export const STATUSES = ['todo', 'in_progress', 'blocked', 'done'] as const
+export const STATUSES = ['todo', 'in_progress', 'blocked', 'review', 'done'] as const
 export type Status = (typeof STATUSES)[number]
 
 export const STATUS_LABELS: Record<Status, string> = {
   todo: 'To do',
   in_progress: 'In progress',
   blocked: 'Blocked',
+  review: 'Review',
   done: 'Done'
 }
 
@@ -30,6 +31,16 @@ export const PRIORITY_LABELS: Record<Priority, string> = {
   medium: 'Medium',
   high: 'High',
   urgent: 'Urgent'
+}
+
+/** Who an item is assigned to (also used as the author of notes). */
+export const ASSIGNEES = ['me', 'claude-code', 'claude'] as const
+export type Assignee = (typeof ASSIGNEES)[number]
+
+export const ASSIGNEE_LABELS: Record<Assignee, string> = {
+  me: 'Me',
+  'claude-code': 'Claude Code',
+  claude: 'Claude'
 }
 
 export const RECURRENCES = ['daily', 'weekdays', 'weekly'] as const
@@ -47,6 +58,14 @@ export const RECURRING_LEVELS: readonly Level[] = ['task', 'microtask']
 /** Which items a tree contains. Pruned-away ancestors are kept as `isContext` nodes. */
 export type TreeView = 'all' | 'active' | 'completed'
 
+export interface TreeOptions {
+  /** Only the subtree under this item */
+  rootId?: number
+  view?: TreeView
+  /** Only items with this assignee; their ancestors are kept as context */
+  assignee?: Assignee
+}
+
 export interface Task {
   id: number
   parentId: number | null
@@ -59,10 +78,20 @@ export interface Task {
   priority: Priority
   /** Set on recurring tasks: completing one logs a Completion and rolls the deadline forward. */
   recurrence: Recurrence | null
+  assignee: Assignee
   sortOrder: number
   createdAt: string
   updatedAt: string
   completedAt: string | null
+}
+
+/** An append-only note on an item. */
+export interface Note {
+  id: number
+  taskId: number
+  createdAt: string
+  author: Assignee
+  text: string
 }
 
 /** One logged occurrence of a recurring task. */
@@ -113,6 +142,8 @@ export interface CreateTaskInput {
   priority?: Priority
   /** task/microtask only. Without a deadline, the first occurrence is due today. */
   recurrence?: Recurrence | null
+  /** Default 'me' */
+  assignee?: Assignee
 }
 
 export interface UpdateTaskInput {
@@ -122,6 +153,7 @@ export interface UpdateTaskInput {
   deadline?: string | null
   priority?: Priority
   recurrence?: Recurrence | null
+  assignee?: Assignee
 }
 
 export interface ListTasksFilter {
@@ -130,6 +162,7 @@ export interface ListTasksFilter {
   status?: Status | Status[]
   dueOnOrBefore?: string
   includeDone?: boolean
+  assignee?: Assignee
 }
 
 export function levelIndex(level: Level): number {

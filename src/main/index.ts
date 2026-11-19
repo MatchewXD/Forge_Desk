@@ -4,7 +4,8 @@ import type { DatabaseSync } from 'node:sqlite'
 import {
   TaskRepository,
   type CreateTaskInput,
-  type TreeView,
+  type Assignee,
+  type TreeOptions,
   type UpdateTaskInput,
   dataVersion,
   defaultDbPath,
@@ -30,7 +31,7 @@ function handle<A extends unknown[], T>(channel: string, fn: (...args: A) => T):
 }
 
 function registerIpc(dbPath: string): void {
-  handle(CHANNELS.getTree, (view?: TreeView) => repo.getTree(undefined, view))
+  handle(CHANNELS.getTree, (opts?: TreeOptions) => repo.getTree(opts))
   handle(CHANNELS.getToday, (today?: string) => repo.getToday(today))
   handle(CHANNELS.getAncestors, (id: number) => repo.getAncestors(id))
   handle(CHANNELS.createTask, (input: CreateTaskInput) => repo.createTask(input))
@@ -42,6 +43,10 @@ function registerIpc(dbPath: string): void {
     repo.completeTask(id, { cascade })
   )
   handle(CHANNELS.reopenTask, (id: number) => repo.reopenTask(id))
+  handle(CHANNELS.listNotes, (taskId: number) => repo.listNotes(taskId))
+  handle(CHANNELS.addNote, (taskId: number, text: string, author?: Assignee) =>
+    repo.addNote(taskId, text, author)
+  )
   handle(CHANNELS.deleteTask, (id: number) => repo.deleteTask(id))
   handle(CHANNELS.dbPath, () => dbPath)
 }

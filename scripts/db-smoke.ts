@@ -5,6 +5,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import {
   TaskRepository,
   openDatabase,
@@ -97,20 +98,20 @@ try {
   repo.completeTask(doneTask.id)
   const titles = (nodes: TaskNode[]): string[] =>
     nodes.flatMap((n) => [`${n.title}${n.isContext ? '*' : ''}`, ...titles(n.children)])
-  assert.deepEqual(titles(repo.getTree(v2.id, 'active')), ['V2', 'P2', 'MsA', 'Open task'])
-  assert.deepEqual(titles(repo.getTree(v2.id, 'completed')), ['V2*', 'P2*', 'MsA*', 'Done task'])
-  assert.equal(repo.getTree(v2.id, 'active')[0].progress, 0.5) // progress uses the full tree
+  assert.deepEqual(titles(repo.getTree({ rootId: v2.id, view: 'active' })), ['V2', 'P2', 'MsA', 'Open task'])
+  assert.deepEqual(titles(repo.getTree({ rootId: v2.id, view: 'completed' })), ['V2*', 'P2*', 'MsA*', 'Done task'])
+  assert.equal(repo.getTree({ rootId: v2.id, view: 'active' })[0].progress, 0.5) // progress uses the full tree
 
   // Done parent with an open child: parent stays in the active tree as context
   repo.completeTask(msA.id)
-  assert.deepEqual(titles(repo.getTree(v2.id, 'active')), ['V2', 'P2', 'MsA*', 'Open task'])
-  assert.deepEqual(titles(repo.getTree(v2.id, 'completed')), ['V2*', 'P2*', 'MsA', 'Done task'])
+  assert.deepEqual(titles(repo.getTree({ rootId: v2.id, view: 'active' })), ['V2', 'P2', 'MsA*', 'Open task'])
+  assert.deepEqual(titles(repo.getTree({ rootId: v2.id, view: 'completed' })), ['V2*', 'P2*', 'MsA', 'Done task'])
 
   // Reopening a child also reopens its done ancestors
   repo.reopenTask(doneTask.id)
   assert.equal(repo.getTask(msA.id)!.status, 'todo')
   assert.equal(repo.getTask(doneTask.id)!.completedAt, null)
-  assert.deepEqual(titles(repo.getTree(v2.id, 'completed')), [])
+  assert.deepEqual(titles(repo.getTree({ rootId: v2.id, view: 'completed' })), [])
 
   // ---------- recurrence ----------
   assert.equal(nextOccurrence('weekdays', '2026-11-20', '2026-11-19'), '2026-11-23') // Fri -> Mon
@@ -142,12 +143,12 @@ try {
   assert.equal(log.length, 2)
 
   // Completed view: recurring task as context, carrying its log
-  const done = repo.getTree(v2.id, 'completed')
+  const done = repo.getTree({ rootId: v2.id, view: 'completed' })
   const standup = done[0].children[0].children[0].children.find((n) => n.title === 'Standup')!
   assert.equal(standup.isContext, true)
   assert.equal(standup.completions!.length, 2)
   // Still in the active tree and on Today when due
-  assert.ok(titles(repo.getTree(v2.id, 'active')).includes('Standup'))
+  assert.ok(titles(repo.getTree({ rootId: v2.id, view: 'active' })).includes('Standup'))
 
   const weekly = repo.createTask({ parentId: msA.id, title: 'Review', recurrence: 'weekly', deadline: addDays(today, -3) })
   assert.deepEqual(repo.getToday(today).overdue.map((t) => t.title), ['Review'])
@@ -157,8 +158,74 @@ try {
   repo.updateTask(weekly.id, { recurrence: null })
   assert.equal(repo.completeTask(weekly.id).status, 'done')
 
+  // ---------- assignee, review status, notes ----------
+  const forClaude = repo.createTask({ parentId: msA.id, title: 'Build feature X', assignee: 'claude-code', priority: 'high' })
+  assert.equal(forClaude.assignee, 'claude-code')
+  assert.equal(repo.createTask({ parentId: msA.id, title: 'Mine' }).assignee, 'me') // default
+  assert.throws(() => repo.updateTask(forClaude.id, { assignee: 'bob' as never }), /Invalid assignee/)
+  assert.deepEqual(repo.listTasks({ assignee: 'claude-code' }).map((t) => t.title), ['Build feature X'])
+  // Assignee filter keeps ancestors as context
+  assert.deepEqual(titles(repo.getTree({ view: 'active', assignee: 'claude-code' })), [
+    'V2*',
+    'P2*',
+    'MsA*',
+    'Build feature X'
+  ])
+
+  // review = finished but awaiting check: still open (active tree, not counted as done)
+  const reviewed = repo.updateTask(forClaude.id, { status: 'review' })
+  assert.equal(reviewed.status, 'review')
+  assert.equal(reviewed.completedAt, null)
+  assert.ok(titles(repo.getTree({ rootId: v2.id, view: 'active' })).includes('Build feature X'))
+
+  // Notes: append-only log
+  const n1 = repo.addNote(forClaude.id, 'Spec: add a button', 'me')
+  const n2 = repo.addNote(forClaude.id, 'Built it on branch claude/x', 'claude-code')
+  assert.equal(repo.addNote(forClaude.id, 'default author').author, 'me')
+  assert.deepEqual(repo.listNotes(forClaude.id).map((n) => n.id), [n1.id, n2.id, n2.id + 1])
+  assert.throws(() => repo.addNote(forClaude.id, '   '), /Note text is required/)
+  assert.throws(() => repo.addNote(forClaude.id, 'x', 'bob' as never), /Invalid assignee/)
+  assert.throws(() => db.exec(`UPDATE task_notes SET text = 'edited' WHERE id = ${n1.id}`), /append-only/)
+  assert.throws(() => db.exec(`DELETE FROM task_notes WHERE id = ${n1.id}`), /append-only/)
+  assert.equal(repo.getTaskDetail(forClaude.id).notes.length, 3)
+  // ...but deleting the item removes its notes with it
+  repo.deleteTask(forClaude.id)
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM task_notes').get()!.n, 0)
+
   otherDb.close()
   db.close()
+
+  // ---------- migration from a v2 database (pre-assignee) keeps data and links ----------
+  const legacyPath = join(dir, 'legacy.db')
+  const legacy = new DatabaseSync(legacyPath)
+  legacy.exec(`
+    CREATE TABLE tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, parent_id INTEGER REFERENCES tasks(id) ON DELETE CASCADE,
+      level TEXT NOT NULL, title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'todo' CHECK (status IN ('todo','in_progress','blocked','done')),
+      deadline TEXT, priority TEXT NOT NULL DEFAULT 'medium', sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL, completed_at TEXT, recurrence TEXT);
+    CREATE TABLE task_completions (id INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE, occurrence_date TEXT, completed_at TEXT NOT NULL);
+    INSERT INTO tasks VALUES (1, NULL, 'vision', 'Old vision', '', 'todo', NULL, 'high', 0, 'x', 'x', NULL, NULL);
+    INSERT INTO tasks VALUES (5, 1, 'project', 'Old project', '', 'done', NULL, 'low', 0, 'x', 'x', 'y', NULL);
+    INSERT INTO task_completions VALUES (1, 5, '2026-01-01', 'z');
+    PRAGMA user_version = 2;`)
+  legacy.close()
+  const migrated = openDatabase(legacyPath)
+  const mrepo = new TaskRepository(migrated)
+  assert.deepEqual(
+    mrepo.listTasks().map((t) => [t.id, t.parentId, t.title, t.status, t.assignee]),
+    [
+      [1, null, 'Old vision', 'todo', 'me'],
+      [5, 1, 'Old project', 'done', 'me']
+    ]
+  )
+  assert.equal(mrepo.listCompletions(5).length, 1) // not cascaded away by the table rebuild
+  assert.equal(migrated.prepare('PRAGMA foreign_keys').get()!.foreign_keys, 1) // switched back on
+  assert.equal(mrepo.createTask({ title: 'New' }).id, 6) // ids continue after the old max
+  mrepo.deleteTask(1) // cascades still work after the rebuild
+  assert.equal(mrepo.listCompletions().length, 0)
+  migrated.close()
   console.log('db-smoke: all checks passed')
 } finally {
   rmSync(dir, { recursive: true, force: true })

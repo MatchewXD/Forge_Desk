@@ -1,6 +1,8 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
 import type {
+  Assignee,
   CreateTaskInput,
+  Note,
   Task,
   TaskNode,
   TodayView,
@@ -18,9 +20,17 @@ export interface Notice {
   action?: { label: string; run: () => void }
 }
 
+export type AssigneeFilter = Assignee | 'all'
+
 export interface ForgeData {
-  /** Active tree: open items (done ancestors only as context). */
+  /** Active tree: open items (done ancestors only as context), filtered by assignee. */
   tree: TaskNode[]
+  assigneeFilter: AssigneeFilter
+  setAssigneeFilter: (f: AssigneeFilter) => void
+  /** Bumps on every data refresh (incl. external changes) so per-item fetches can follow. */
+  version: number
+  listNotes: (taskId: number) => Promise<Note[]>
+  addNote: (taskId: number, text: string) => Promise<boolean>
   /** Completed archive tree: done items + recurring completion logs, open ancestors as context. */
   completed: TaskNode[]
   today: TodayView | null
@@ -45,6 +55,22 @@ export function useForgeData(): ForgeData {
   const [completed, setCompleted] = useState<TaskNode[]>([])
   const [today, setToday] = useState<TodayView | null>(null)
   const [loaded, setLoaded] = useState(false)
+  const [version, setVersion] = useState(0)
+  const [assigneeFilter, setAssigneeFilterState] = useState<AssigneeFilter>(() => {
+    try {
+      return (localStorage.getItem('forge:assigneeFilter') as AssigneeFilter | null) ?? 'all'
+    } catch {
+      return 'all'
+    }
+  })
+  const setAssigneeFilter = (f: AssigneeFilter): void => {
+    setAssigneeFilterState(f)
+    try {
+      localStorage.setItem('forge:assigneeFilter', f)
+    } catch {
+      /* ignore */
+    }
+  }
   const [notice, setNotice] = useState<Notice | null>(null)
   const seq = useRef(0)
 
@@ -61,8 +87,8 @@ export function useForgeData(): ForgeData {
     const mine = ++seq.current
     try {
       const [t, c, d] = await Promise.all([
-        api.getTree('active'),
-        api.getTree('completed'),
+        api.getTree({ view: 'active', assignee: assigneeFilter === 'all' ? undefined : assigneeFilter }),
+        api.getTree({ view: 'completed' }),
         api.getToday(toLocalDateString())
       ])
       if (mine !== seq.current) return // a newer refresh superseded this one
@@ -70,10 +96,11 @@ export function useForgeData(): ForgeData {
       setCompleted(c)
       setToday(d)
       setLoaded(true)
+      setVersion((v) => v + 1)
     } catch (e) {
       notify({ kind: 'error', text: (e as Error).message })
     }
-  }, [notify])
+  }, [notify, assigneeFilter])
 
   useEffect(() => {
     void refresh()
@@ -125,6 +152,11 @@ export function useForgeData(): ForgeData {
 
   return {
     tree,
+    assigneeFilter,
+    setAssigneeFilter,
+    version,
+    listNotes: (taskId) => api.listNotes(taskId),
+    addNote: async (taskId, text) => (await run(() => api.addNote(taskId, text, 'me'))) !== null,
     completed,
     today,
     loaded,

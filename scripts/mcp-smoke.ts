@@ -13,7 +13,10 @@ const dir = mkdtempSync(join(tmpdir(), 'forge-desk-mcp-'))
 const transport = new StdioClientTransport({
   command: process.execPath,
   args: [resolve(import.meta.dirname, '../src/mcp/server.ts')],
-  env: { ...process.env, FORGE_DESK_DB: join(dir, 'test.db') } as Record<string, string>,
+  env: { ...process.env, FORGE_DESK_DB: join(dir, 'test.db'), FORGE_DESK_AGENT: 'claude-code' } as Record<
+    string,
+    string
+  >,
   stderr: 'ignore'
 })
 const client = new Client({ name: 'forge-desk-smoke', version: '0.0.0' })
@@ -31,10 +34,12 @@ try {
   await client.connect(transport)
   const tools = (await client.listTools()).tools.map((t) => t.name).sort()
   assert.deepEqual(tools, [
+    'add_note',
     'complete_task',
     'create_task',
     'get_task',
     'get_today',
+    'list_notes',
     'list_tasks',
     'move_task',
     'update_task'
@@ -92,6 +97,30 @@ try {
   assert.equal(weekly.recurrence, 'weekly')
   assert.equal((await call('update_task', { id: rec.id, recurrence: null })).recurrence, null)
   await assert.rejects(call('update_task', { id: ms1.id, recurrence: 'daily' }), /Only tasks and micro-tasks/)
+
+  // Assignee + review + notes (the Claude Code handoff loop)
+  const handoff = await call('create_task', {
+    title: 'Implement thing',
+    parent_id: ms2.id,
+    assignee: 'claude-code',
+    priority: 'urgent',
+    description: 'Spec here'
+  })
+  assert.equal(handoff.assignee, 'claude-code')
+  const mine = await call('list_tasks', { assignee: 'claude-code', status: 'todo' })
+  assert.deepEqual(mine.map((t: any) => t.id), [handoff.id])
+  const ctxTree = await call('list_tasks', { tree: true, view: 'active', assignee: 'claude-code' })
+  assert.equal(ctxTree[0].isContext, true)
+  await call('update_task', { id: handoff.id, status: 'in_progress' })
+  const note = await call('add_note', { id: handoff.id, text: 'Built on branch x' })
+  assert.equal(note.author, 'claude-code') // from FORGE_DESK_AGENT
+  assert.equal((await call('add_note', { id: handoff.id, text: 'hi', author: 'me' })).author, 'me')
+  assert.equal((await call('update_task', { id: handoff.id, status: 'review' })).status, 'review')
+  const notes = await call('list_notes', { id: handoff.id })
+  assert.deepEqual(notes.map((n: any) => n.text), ['Built on branch x', 'hi'])
+  assert.equal((await call('get_task', { id: handoff.id })).notes.length, 2)
+  assert.equal((await call('update_task', { id: handoff.id, assignee: 'me' })).assignee, 'me')
+  await assert.rejects(call('add_note', { id: 9999, text: 'x' }), /not found/)
 
   // Repository rules surface as tool errors
   await assert.rejects(call('create_task', { title: 'Bad', parent_id: vision.id, level: 'task' }), /must be a project/)

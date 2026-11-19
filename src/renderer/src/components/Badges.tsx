@@ -1,8 +1,10 @@
 import {
+  ASSIGNEE_LABELS,
   LEVEL_LABELS,
   PRIORITY_LABELS,
   RECURRENCE_LABELS,
   STATUS_LABELS,
+  type Assignee,
   type Level,
   type Priority,
   type Recurrence,
@@ -12,6 +14,16 @@ import { deadlineInfo, pct } from '../lib'
 
 export function LevelTag({ level }: { level: Level }): React.JSX.Element {
   return <span className={`level-tag level-${level}`}>{LEVEL_LABELS[level]}</span>
+}
+
+/** Shown only for work handed to Claude ('me' is the default and stays unmarked). */
+export function AssigneeTag({ assignee }: { assignee: Assignee }): React.JSX.Element | null {
+  if (assignee === 'me') return null
+  return (
+    <span className={`assignee-tag assignee-${assignee}`} title={`Assigned to ${ASSIGNEE_LABELS[assignee]}`}>
+      {ASSIGNEE_LABELS[assignee]}
+    </span>
+  )
 }
 
 export function RecurrenceTag({

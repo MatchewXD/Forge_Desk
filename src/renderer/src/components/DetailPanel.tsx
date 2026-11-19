@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
+  ASSIGNEES,
+  ASSIGNEE_LABELS,
   LEVEL_LABELS,
   PRIORITIES,
   PRIORITY_LABELS,
@@ -10,6 +12,7 @@ import {
   STATUS_LABELS,
   childLevel,
   parentLevel,
+  type Assignee,
   type Priority,
   type Recurrence,
   type Status,
@@ -18,6 +21,7 @@ import {
 import { useForge } from '../store'
 import { ancestorIds, countDescendants, type IndexedNode } from '../lib'
 import { LevelTag, ProgressBar } from './Badges'
+import { NotesLog } from './NotesLog'
 
 interface Props {
   node: TaskNode
@@ -160,6 +164,19 @@ export function DetailPanel({ node, index, onClose, onSelect, onAddChild }: Prop
           </select>
         </label>
         <label className="field">
+          <span>Assignee</span>
+          <select
+            value={node.assignee}
+            onChange={(e) => void forge.updateTask(node.id, { assignee: e.target.value as Assignee })}
+          >
+            {ASSIGNEES.map((a) => (
+              <option key={a} value={a}>
+                {ASSIGNEE_LABELS[a]}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="field">
           <span>Deadline</span>
           <div className="date-row">
             <input
@@ -232,6 +249,8 @@ export function DetailPanel({ node, index, onClose, onSelect, onAddChild }: Prop
           onBlur={saveDescription}
         />
       </label>
+
+      <NotesLog taskId={node.id} />
 
       <div className="detail-actions">
         {childLvl && (

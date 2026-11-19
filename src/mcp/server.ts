@@ -12,6 +12,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 import { z } from 'zod'
 import {
+  ASSIGNEES,
   LEVELS,
   PRIORITIES,
   RECURRENCES,
@@ -20,6 +21,11 @@ import {
   defaultDbPath,
   openDatabase
 } from '../shared/db/index.ts'
+
+// Who this server speaks for: authors notes when add_note gets no explicit author.
+// Set FORGE_DESK_AGENT=claude-code in Claude Code's config; Claude Desktop uses the default.
+const agentEnv = process.env.FORGE_DESK_AGENT
+const AGENT = (ASSIGNEES as readonly string[]).includes(agentEnv ?? '') ? (agentEnv as (typeof ASSIGNEES)[number]) : 'claude'
 
 const dbPath = defaultDbPath()
 const db = openDatabase(dbPath)
@@ -42,6 +48,9 @@ const id = z.number().int().positive()
 const level = z.enum(LEVELS)
 const status = z.enum(STATUSES)
 const priority = z.enum(PRIORITIES)
+const assignee = z
+  .enum(ASSIGNEES)
+  .describe("Who does the work: 'me' (the user), 'claude-code' (Claude Code in the repo) or 'claude' (Claude chat)")
 const recurrence = z
   .enum(RECURRENCES)
   .nullable()
@@ -71,6 +80,7 @@ server.registerTool(
       tree: z.boolean().optional().describe('Return the nested tree with progress instead of a flat list'),
       root_id: id.optional().describe('With tree=true: only the subtree under this item'),
       view: z.enum(['all', 'active', 'completed']).optional().describe('With tree=true (default all)'),
+      assignee: assignee.optional().describe('Only items assigned to this; with tree=true ancestors are kept as context'),
       parent_id: id.nullable().optional().describe('Direct children of this item (null = top-level visions)'),
       level: level.optional(),
       status: z.union([status, z.array(status)]).optional(),
@@ -82,13 +92,14 @@ server.registerTool(
   (a) =>
     run(() =>
       a.tree
-        ? repo.getTree(a.root_id, a.view)
+        ? repo.getTree({ rootId: a.root_id, view: a.view, assignee: a.assignee })
         : repo.listTasks({
             parentId: a.parent_id,
             level: a.level,
             status: a.status,
             dueOnOrBefore: a.due_before,
-            includeDone: a.include_done
+            includeDone: a.include_done,
+            assignee: a.assignee
           })
     )
 )
@@ -99,7 +110,8 @@ server.registerTool(
     title: 'Get task',
     description:
       'Get one item with its rolled-up progress, its ancestors (root first), its full subtree of children, ' +
-      'and (for recurring tasks) its log of completed occurrences.',
+      'its notes (oldest first) and, for recurring tasks, its log of completed occurrences. ' +
+      'The description plus notes are the spec for the work.',
     inputSchema: { id },
     annotations: { readOnlyHint: true }
   },
@@ -122,7 +134,8 @@ server.registerTool(
       status: status.optional().describe('Default todo'),
       deadline: date.nullable().optional(),
       priority: priority.optional().describe('Default medium'),
-      recurrence: recurrence.optional()
+      recurrence: recurrence.optional(),
+      assignee: assignee.optional().describe("Default 'me'")
     }
   },
   (a) =>
@@ -135,7 +148,8 @@ server.registerTool(
         status: a.status,
         deadline: a.deadline,
         priority: a.priority,
-        recurrence: a.recurrence
+        recurrence: a.recurrence,
+        assignee: a.assignee
       })
     )
 )
@@ -148,6 +162,7 @@ server.registerTool(
       'Update fields of an item. Only the fields you pass change. Pass deadline=null to clear it, ' +
       'recurrence=null to stop repeating. Setting status=done on a recurring task completes the current ' +
       'occurrence. Setting a done item back to todo/in_progress also reopens its done ancestors. ' +
+      "status=review means the work is finished but waiting for the user to check it. " +
       'To change the parent or position use move_task.',
     inputSchema: {
       id,
@@ -156,7 +171,8 @@ server.registerTool(
       status: status.optional(),
       deadline: date.nullable().optional(),
       priority: priority.optional(),
-      recurrence: recurrence.optional()
+      recurrence: recurrence.optional(),
+      assignee: assignee.optional()
     }
   },
   ({ id, ...patch }) => run(() => repo.updateTask(id, patch))
@@ -193,6 +209,33 @@ server.registerTool(
 )
 
 server.registerTool(
+  'add_note',
+  {
+    title: 'Add note',
+    description:
+      'Append a note to an item (an append-only log: notes cannot be edited or deleted). Use it for progress ' +
+      'reports, questions and handoff details. Markdown is fine.',
+    inputSchema: {
+      id,
+      text: z.string().min(1),
+      author: z.enum(ASSIGNEES).optional().describe(`Default '${AGENT}' (this server's agent)`)
+    }
+  },
+  (a) => run(() => repo.addNote(a.id, a.text, a.author ?? AGENT))
+)
+
+server.registerTool(
+  'list_notes',
+  {
+    title: 'List notes',
+    description: "An item's notes, oldest first, each with timestamp, author and text.",
+    inputSchema: { id },
+    annotations: { readOnlyHint: true }
+  },
+  (a) => run(() => repo.listNotes(a.id))
+)
+
+server.registerTool(
   'get_today',
   {
     title: "Get today's agenda",
@@ -221,4 +264,4 @@ process.on('SIGTERM', shutdown)
 process.stdin.on('close', shutdown)
 
 await server.connect(new StdioServerTransport())
-console.error(`[forge-desk-mcp] ready — database: ${dbPath}`)
+console.error(`[forge-desk-mcp] ready — agent: ${AGENT}, database: ${dbPath}`)

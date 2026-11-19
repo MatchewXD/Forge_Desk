@@ -1,15 +1,18 @@
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite'
 import {
+  ASSIGNEES,
   PRIORITIES,
   RECURRENCES,
   RECURRING_LEVELS,
   STATUSES,
   childLevel,
   parentLevel,
+  type Assignee,
   type Completion,
   type CreateTaskInput,
   type ListTasksFilter,
   type Level,
+  type Note,
   type Priority,
   type Recurrence,
   type Status,
@@ -17,7 +20,7 @@ import {
   type TaskNode,
   type TaskWithPath,
   type TodayView,
-  type TreeView,
+  type TreeOptions,
   type UpdateTaskInput
 } from './model.ts'
 import { addDays, firstOccurrence, isValidDate, nextOccurrence, toLocalDateString } from './dates.ts'
@@ -32,10 +35,19 @@ interface TaskRow {
   deadline: string | null
   priority: Priority
   recurrence: Recurrence | null
+  assignee: Assignee
   sort_order: number
   created_at: string
   updated_at: string
   completed_at: string | null
+}
+
+interface NoteRow {
+  id: number
+  task_id: number
+  created_at: string
+  author: Assignee
+  text: string
 }
 
 interface CompletionRow {
@@ -63,11 +75,16 @@ function toTask(r: TaskRow): Task {
     deadline: r.deadline,
     priority: r.priority,
     recurrence: r.recurrence ?? null,
+    assignee: r.assignee ?? 'me',
     sortOrder: r.sort_order,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
     completedAt: r.completed_at
   }
+}
+
+function toNote(r: NoteRow): Note {
+  return { id: r.id, taskId: r.task_id, createdAt: r.created_at, author: r.author, text: r.text }
 }
 
 function toCompletion(r: CompletionRow): Completion {
@@ -122,6 +139,10 @@ export class TaskRepository {
     } else if (filter.includeDone === false) {
       where.push("status != 'done'")
     }
+    if (filter.assignee) {
+      where.push('assignee = ?')
+      params.push(filter.assignee)
+    }
     if (filter.dueOnOrBefore) {
       where.push('deadline IS NOT NULL AND deadline <= ?')
       params.push(filter.dueOnOrBefore)
@@ -146,6 +167,8 @@ export class TaskRepository {
 
   /**
    * The forest (or the subtree under rootId) with rolled-up progress.
+   * `assignee` keeps only that person's items, with their ancestors as context.
+   * View:
    * - 'all': everything.
    * - 'active': open items. A done item is kept only as greyed context (`isContext`) when it
    *   still has open descendants.
@@ -153,7 +176,8 @@ export class TaskRepository {
    *   plus their open ancestors as context so the original hierarchy is visible.
    * Progress is always computed on the full tree, so bars don't change with the view.
    */
-  getTree(rootId?: number, view: TreeView = 'all'): TaskNode[] {
+  getTree(opts: TreeOptions = {}): TaskNode[] {
+    const { rootId, view = 'all', assignee } = opts
     const nodes = new Map<number, TaskNode>()
     for (const t of this.listTasks()) {
       nodes.set(t.id, { ...t, children: [], progress: 0, leafCount: 0, leafDone: 0 })
@@ -176,21 +200,22 @@ export class TaskRepository {
       const root = nodes.get(rootId)
       forest = root ? [root] : []
     }
-    if (view === 'active') {
-      return prune(forest, (n) => n.status !== 'done')
-    }
+    if (view === 'all' && !assignee) return forest
     if (view === 'completed') {
       for (const c of this.listCompletions()) {
         const n = nodes.get(c.taskId)
         if (n) (n.completions ??= []).push(c)
       }
-      return prune(
-        forest,
-        (n) => n.status === 'done' || (n.completions?.length ?? 0) > 0,
-        (n) => n.status !== 'done'
-      )
     }
-    return forest
+    const inView = (n: TaskNode): boolean =>
+      view === 'active'
+        ? n.status !== 'done'
+        : view === 'completed'
+          ? n.status === 'done' || (n.completions?.length ?? 0) > 0
+          : true
+    const matches = (n: TaskNode): boolean => inView(n) && (!assignee || n.assignee === assignee)
+    // In the archive, an open recurring task is shown greyed even though it carries a log.
+    return prune(forest, matches, view === 'completed' ? (n) => n.status !== 'done' : undefined)
   }
 
   /** Ancestors of a task, root first (excluding the task itself). */
@@ -208,11 +233,23 @@ export class TaskRepository {
     return rows.map(toTask)
   }
 
-  /** One item with rolled-up progress, its ancestors (root first), subtree, and completion log. */
-  getTaskDetail(id: number): { task: TaskNode; ancestors: Task[]; completions: Completion[] } {
-    const [node] = this.getTree(id)
+  /** One item with rolled-up progress, its ancestors (root first), subtree, notes and completion log. */
+  getTaskDetail(id: number): { task: TaskNode; ancestors: Task[]; notes: Note[]; completions: Completion[] } {
+    const [node] = this.getTree({ rootId: id })
     if (!node) throw new TaskError(`Task ${id} not found`)
-    return { task: node, ancestors: this.getAncestors(id), completions: this.listCompletions(id) }
+    return {
+      task: node,
+      ancestors: this.getAncestors(id),
+      notes: this.listNotes(id),
+      completions: this.listCompletions(id)
+    }
+  }
+
+  /** An item's notes, oldest first. */
+  listNotes(taskId: number): Note[] {
+    this.requireTask(taskId)
+    const rows = this.db.prepare('SELECT * FROM task_notes WHERE task_id = ? ORDER BY id').all(taskId)
+    return (rows as unknown as NoteRow[]).map(toNote)
   }
 
   /**
@@ -267,7 +304,8 @@ export class TaskRepository {
     const status = input.status ?? 'todo'
     const priority = input.priority ?? 'medium'
     const recurrence = input.recurrence ?? null
-    validateFields({ status, priority, deadline: input.deadline, recurrence })
+    const assignee = input.assignee ?? 'me'
+    validateFields({ status, priority, deadline: input.deadline, recurrence, assignee })
     validateRecurrence(level, recurrence)
     let deadline = input.deadline ?? null
     if (recurrence && !deadline) deadline = firstOccurrence(recurrence, toLocalDateString())
@@ -280,8 +318,8 @@ export class TaskRepository {
       const result = this.db
         .prepare(
           `INSERT INTO tasks (parent_id, level, title, description, status, deadline, priority,
-                              recurrence, sort_order, created_at, updated_at, completed_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+                              recurrence, assignee, sort_order, created_at, updated_at, completed_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .run(
           parentId,
@@ -292,6 +330,7 @@ export class TaskRepository {
           deadline,
           priority,
           recurrence,
+          assignee,
           next.n,
           now,
           now,
@@ -335,6 +374,10 @@ export class TaskRepository {
     if (patch.priority !== undefined) {
       sets.push('priority = ?')
       params.push(patch.priority)
+    }
+    if (patch.assignee !== undefined) {
+      sets.push('assignee = ?')
+      params.push(patch.assignee)
     }
     let deadline = patch.deadline !== undefined ? patch.deadline || null : current.deadline
     if (patch.recurrence !== undefined) {
@@ -419,6 +462,24 @@ export class TaskRepository {
       }
     })
     return this.requireTask(id)
+  }
+
+  /** Append a note to an item's log. Notes can't be edited or deleted. */
+  addNote(taskId: number, text: string, author: Assignee = 'me'): Note {
+    this.requireTask(taskId)
+    const body = text?.trim()
+    if (!body) throw new TaskError('Note text is required')
+    validateFields({ assignee: author })
+    const now = new Date().toISOString()
+    return this.tx(() => {
+      const r = this.db
+        .prepare('INSERT INTO task_notes (task_id, created_at, author, text) VALUES (?, ?, ?, ?)')
+        .run(taskId, now, author, body)
+      this.db.prepare('UPDATE tasks SET updated_at = ? WHERE id = ?').run(now, taskId)
+      return toNote(
+        this.db.prepare('SELECT * FROM task_notes WHERE id = ?').get(Number(r.lastInsertRowid)) as unknown as NoteRow
+      )
+    })
   }
 
   /** Back to todo (and its done ancestors with it). No-op for an item that isn't done. */
@@ -554,6 +615,7 @@ function validateFields(f: {
   priority?: string
   deadline?: string | null
   recurrence?: string | null
+  assignee?: string
 }): void {
   if (f.status !== undefined && !(STATUSES as readonly string[]).includes(f.status)) {
     throw new TaskError(`Invalid status "${f.status}" (expected ${STATUSES.join(', ')})`)
@@ -563,6 +625,9 @@ function validateFields(f: {
   }
   if (f.deadline && !isValidDate(f.deadline)) {
     throw new TaskError(`Invalid deadline "${f.deadline}" (expected YYYY-MM-DD)`)
+  }
+  if (f.assignee !== undefined && !(ASSIGNEES as readonly string[]).includes(f.assignee)) {
+    throw new TaskError(`Invalid assignee "${f.assignee}" (expected ${ASSIGNEES.join(', ')})`)
   }
   if (f.recurrence && !(RECURRENCES as readonly string[]).includes(f.recurrence)) {
     throw new TaskError(`Invalid recurrence "${f.recurrence}" (expected ${RECURRENCES.join(', ')} or null)`)

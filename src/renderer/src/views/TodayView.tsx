@@ -1,7 +1,7 @@
 import type { TaskWithPath } from '@shared/db/model.ts'
 import { useForge } from '../store'
 import { longDate } from '../lib'
-import { CheckButton, DeadlineChip, LevelTag, PriorityDot, RecurrenceTag } from '../components/Badges'
+import { AssigneeTag, CheckButton, DeadlineChip, LevelTag, PriorityDot, RecurrenceTag } from '../components/Badges'
 
 export function TodayView(props: { onOpenTask: (id: number) => void }): React.JSX.Element {
   const { today: view, tree } = useForge()
@@ -122,6 +122,8 @@ function TodayRow(props: { task: TaskWithPath; today: string; onOpen: (id: numbe
           {t.title}
           {t.status === 'in_progress' && <span className="mini-status in_progress">In progress</span>}
           {t.status === 'blocked' && <span className="mini-status blocked">Blocked</span>}
+          {t.status === 'review' && <span className="mini-status review">Review</span>}
+          <AssigneeTag assignee={t.assignee} />
         </div>
         {t.path.length > 0 && <div className="today-path">{t.path.join(' › ')}</div>}
       </div>

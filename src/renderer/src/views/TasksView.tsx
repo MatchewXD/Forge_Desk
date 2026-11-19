@@ -1,4 +1,5 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
+import { ASSIGNEES, ASSIGNEE_LABELS } from '@shared/db/model.ts'
 import { useForge } from '../store'
 import { indexTree } from '../lib'
 import { TaskTree, type AddTarget } from '../components/TaskTree'
@@ -17,9 +18,25 @@ interface Props {
 }
 
 export function TasksView(p: Props): React.JSX.Element {
-  const { tree, completed } = useForge()
+  const { tree, completed, assigneeFilter, setAssigneeFilter } = useForge()
   const index = useMemo(() => indexTree(tree), [tree])
   const selected = p.selectedId != null ? (index.get(p.selectedId)?.node ?? null) : null
+
+  // When an assignee filter is chosen, open the filtered paths once so the matches are visible
+  // (the user can still collapse afterwards; later refreshes don't re-expand).
+  const expandOnNextTree = useRef(false)
+  useEffect(() => {
+    expandOnNextTree.current = assigneeFilter !== 'all'
+  }, [assigneeFilter])
+  useEffect(() => {
+    if (!expandOnNextTree.current) return
+    expandOnNextTree.current = false
+    p.setExpanded((prev) => {
+      const next = new Set(prev)
+      for (const e of index.values()) if (e.node.children.length) next.add(e.node.id)
+      return next
+    })
+  }, [index])
 
   const toggleExpand = (id: number): void =>
     p.setExpanded((prev) => {
@@ -61,6 +78,20 @@ export function TasksView(p: Props): React.JSX.Element {
             </p>
           </div>
           <div className="toolbar">
+            <div className="segmented" role="radiogroup" aria-label="Filter by assignee">
+              {(['all', ...ASSIGNEES] as const).map((a) => (
+                <button
+                  key={a}
+                  type="button"
+                  role="radio"
+                  aria-checked={assigneeFilter === a}
+                  className={assigneeFilter === a ? 'active' : ''}
+                  onClick={() => setAssigneeFilter(a)}
+                >
+                  {a === 'all' ? 'Everyone' : ASSIGNEE_LABELS[a]}
+                </button>
+              ))}
+            </div>
             <button type="button" className="btn ghost" onClick={expandAll}>
               Expand all
             </button>
@@ -73,7 +104,15 @@ export function TasksView(p: Props): React.JSX.Element {
           </div>
         </header>
 
-        {tree.length === 0 && p.addTarget !== 'root' ? (
+        {tree.length === 0 && assigneeFilter !== 'all' ? (
+          <div className="empty">
+            <h2>Nothing assigned to {ASSIGNEE_LABELS[assigneeFilter]}</h2>
+            <p className="muted">No open items have this assignee.</p>
+            <button type="button" className="btn" onClick={() => setAssigneeFilter('all')}>
+              Show everyone
+            </button>
+          </div>
+        ) : tree.length === 0 && p.addTarget !== 'root' ? (
           <div className="empty">
             {completed.length > 0 ? (
               <>

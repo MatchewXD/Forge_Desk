@@ -1,7 +1,15 @@
 import { useState } from 'react'
 import { LEVEL_LABELS, childLevel, type Level, type TaskNode } from '@shared/db/model.ts'
 import { useForge } from '../store'
-import { CheckButton, DeadlineChip, LevelTag, PriorityDot, ProgressBar, RecurrenceTag } from './Badges'
+import {
+  AssigneeTag,
+  CheckButton,
+  DeadlineChip,
+  LevelTag,
+  PriorityDot,
+  ProgressBar,
+  RecurrenceTag
+} from './Badges'
 
 export type AddTarget = number | 'root' | null
 
@@ -112,6 +120,8 @@ function TreeRow(props: Props & { node: TaskNode; depth: number; open: boolean }
       <span className="tree-title">{n.title}</span>
       {n.status === 'in_progress' && <span className="mini-status in_progress">In progress</span>}
       {n.status === 'blocked' && <span className="mini-status blocked">Blocked</span>}
+      {n.status === 'review' && <span className="mini-status review">Review</span>}
+      <AssigneeTag assignee={n.assignee} />
       <span className="tree-meta">
         <RecurrenceTag recurrence={n.recurrence} compact />
         <DeadlineChip deadline={n.deadline} today={props.today} done={done} />
