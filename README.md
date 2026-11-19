@@ -34,3 +34,10 @@ npm run typecheck
 ```
 
 Data is stored in `%APPDATA%\ForgeDesk\forge-desk.db` (override with the `FORGE_DESK_DB` environment variable).
+
+## Handing work to Claude Code
+
+1. In Forge Desk, set an item's **Assignee** to *Claude Code* and write the spec in its description and notes.
+2. In Claude Code in this repo, run `/next-task` (or `/next-task <id>`). It needs the `forge-desk` MCP server approved (`/mcp`) and a clean working tree.
+3. Claude builds the highest-priority item on a `claude/task-<id>-…` branch, runs the tests, commits, writes a report note on the item and sets it to **Review**.
+4. Read the note in the detail panel, check the branch, then mark the item done, or add a note and set it back to *To do*.

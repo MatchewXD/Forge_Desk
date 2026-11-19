@@ -1,7 +1,7 @@
 ---
 description: Pick up the top Forge Desk item assigned to claude-code, build it on a new branch, and hand it back for review
 argument-hint: "[task id] (optional: work on this item instead of the top one)"
-allowed-tools: mcp__forge-desk__list_tasks, mcp__forge-desk__get_task, mcp__forge-desk__list_notes, mcp__forge-desk__update_task, mcp__forge-desk__add_note, mcp__forge-desk__complete_task, Bash(git status:*), Bash(git branch:*), Bash(git checkout:*), Bash(git switch:*), Bash(git add:*), Bash(git commit:*), Bash(git diff:*), Bash(git log:*), Bash(git rev-parse:*), Bash(npm run:*)
+allowed-tools: mcp__forge-desk__list_tasks, mcp__forge-desk__get_task, mcp__forge-desk__list_notes, mcp__forge-desk__update_task, mcp__forge-desk__add_note, mcp__forge-desk__complete_task, Bash(git status:*), Bash(git branch:*), Bash(git checkout:*), Bash(git switch:*), Bash(git add:*), Bash(git commit:*), Bash(git diff:*), Bash(git log:*), Bash(git rev-parse:*), Bash(npm run:*), Bash(npm test:*)
 ---
 
 # /next-task — Forge Desk handoff
@@ -101,4 +101,5 @@ relevant output in the note.
 
 Then `update_task` → `{ "status": "review" }` (or `blocked` if verification failed), and finish by
 telling the user, briefly: the item, the branch and commit, the test results, and that it's waiting in
-Forge Desk for their review. Switch back to the branch you started on if it wasn't `main`.
+Forge Desk for their review. Finally switch back to the branch you started on (the work is safe on the
+task branch), so the user's checkout is unchanged.

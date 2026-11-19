@@ -34,6 +34,7 @@ src/
   preload/          contextBridge exposing a typed `window.forge` API
   renderer/         React UI (sidebar, Tasks tree, Today screen, Completed archive, detail panel)
 scripts/            Node scripts (e.g. db-smoke.ts) run directly with Node's type stripping
+.claude/commands/   Project slash commands — next-task.md (the Claude Code handoff, see below)
 build/              App icon: icon-source.png (original art), icon.png (1024, transparent corners),
                     icon.ico (16/24/32/48/64/128/256). Also electron-builder's buildResources dir.
 electron-builder.yml  Installer config (not yet a dependency) — uses build/icon.ico
@@ -61,13 +62,17 @@ Single `tasks` table, self-referencing via `parent_id` (cascade delete).
 | task | 3 | milestone |
 | microtask | 4 | task (leaf; cannot have children) |
 
-Every item has: `title`, `description`, `status` (`todo` / `in_progress` / `blocked` / `done`), `deadline` (nullable date), `priority` (`low` / `medium` / `high` / `urgent`), `recurrence` (nullable: `daily` / `weekdays` / `weekly`), plus `sort_order`, `created_at`, `updated_at`, `completed_at`.
+Every item has: `title`, `description`, `status` (`todo` / `in_progress` / `blocked` / `review` / `done`; `review` = work finished, waiting for the user to check it, still counts as open), `deadline` (nullable date), `priority` (`low` / `medium` / `high` / `urgent`), `recurrence` (nullable: `daily` / `weekdays` / `weekly`), `assignee` (`me` default / `claude-code` / `claude`), plus `sort_order`, `created_at`, `updated_at`, `completed_at`.
 
 `task_completions` (task_id → tasks, cascade delete; `occurrence_date`, `completed_at`) logs each completed occurrence of a recurring task.
 
+`task_notes` (task_id → tasks, cascade delete; `created_at`, `author` (same values as assignee), `text`) is an **append-only** log per item: `addNote` / `listNotes` only, and triggers reject UPDATE and DELETE except the cascade when the item itself is deleted.
+
+**Migrations:** `migrate()` turns foreign keys off while migrations run (so a migration can rebuild a table — SQLite can't alter a CHECK), runs `foreign_key_check` before each commit, and re-reads `user_version` under the write lock because the app and the MCP server may start at the same time. Migration 3 rebuilds `tasks` this way.
+
 **Progress roll-up:** a leaf is 100% if `done`, else 0%. A parent's progress is the average of its children's progress (recursively). Computed in `repository.ts` (`getTree`) on the **full** tree, so filtered views show the same numbers.
 
-**Views (`getTree(rootId, view)`):**
+**Views (`getTree({ rootId, view, assignee })`):** `assignee` keeps only that person's items, ancestors as context. `view`:
 - `active` (Tasks page) — never shows done items. A done item appears only as greyed context (`isContext`) if it still has open descendants.
 - `completed` (Completed page) — done items plus recurring tasks that have logged completions (with `completions[]`), in their original hierarchy; open ancestors are included as greyed context.
 - `all` — everything (default; MCP `list_tasks`).
@@ -95,10 +100,12 @@ Every item has: `title`, `description`, `status` (`todo` / `in_progress` / `bloc
 A stdio MCP server (`src/mcp/server.ts`, `@modelcontextprotocol/sdk` + `zod`) so Claude can manage the task board. It imports `src/shared/db` and opens the **same SQLite file** as the app (`%APPDATA%\ForgeDesk\forge-desk.db`, or `FORGE_DESK_DB`).
 
 Tools (thin wrappers over `TaskRepository` — no logic of their own; tool args are snake_case):
-- `list_tasks` — flat list filtered by parent_id / level / status / due_before / include_done, or `tree: true` (optionally `root_id`, `view: all|active|completed`) for the nested tree with progress
-- `get_task` — one item with progress, its ancestors, its subtree and its completion log (`repo.getTaskDetail`)
-- `create_task` — title, parent_id, level, description, status, deadline, priority, recurrence
-- `update_task` — patch title / description / status / deadline / priority / recurrence (null stops repeating)
+- `list_tasks` — flat list filtered by parent_id / level / status / due_before / include_done / assignee, or `tree: true` (optionally `root_id`, `view: all|active|completed`) for the nested tree with progress
+- `get_task` — one item with progress, its ancestors, its subtree, its notes and its completion log (`repo.getTaskDetail`)
+- `create_task` — title, parent_id, level, description, status, deadline, priority, recurrence, assignee
+- `update_task` — patch title / description / status / deadline / priority / recurrence (null stops repeating) / assignee
+- `add_note` — append a note (author defaults to the server's agent, `FORGE_DESK_AGENT`, else `claude`)
+- `list_notes` — an item's notes, oldest first
 - `move_task` — new_parent_id and/or index (validated against level rules)
 - `complete_task` — mark done, optionally `cascade` to descendants; on a recurring task, logs the occurrence and returns it with the next deadline
 - `get_today` — overdue / due today / next N days (same query as the Today screen)
@@ -110,7 +117,7 @@ How it fits together:
 - New tool? Put the logic in `TaskRepository` first, then add a wrapper here, and cover it in `scripts/mcp-smoke.ts`.
 
 Registration:
-- Claude Code: project-scoped in `.mcp.json` (`claude mcp add --scope project forge-desk -- node E:/Coding/Forge_Desk/src/mcp/server.ts`).
+- Claude Code: project-scoped in `.mcp.json` (`claude mcp add --scope project forge-desk -e FORGE_DESK_AGENT=claude-code -- node E:/Coding/Forge_Desk/src/mcp/server.ts`). `FORGE_DESK_AGENT` makes Claude Code's notes show as "Claude Code".
 - Claude Desktop: add to `%APPDATA%\Claude\claude_desktop_config.json`:
   ```json
   { "mcpServers": { "forge-desk": {
@@ -122,6 +129,14 @@ Registration:
 - Tasks tree and Today never show done items; sidebar **Completed** page shows them in their original hierarchy with greyed open ancestors, completion dates, and Reopen
 - Recurring tasks (daily / weekdays / weekly) on task and micro-task levels: completing logs the occurrence to the archive and rolls the deadline forward; exposed via MCP `create_task` / `update_task`
 - Schema migration 2: `tasks.recurrence`, `task_completions`
+
+### Phase 1.7 — Claude Code handoff (done)
+Queue work for Claude Code from the app, have it built on a branch, review the result.
+1. In Forge Desk, create an item, set **Assignee: Claude Code**, write the spec in the description (and notes).
+2. In Claude Code (in this repo) run **`/next-task`** (or `/next-task <id>`). It needs the `forge-desk` MCP server enabled and a clean working tree. It picks the highest-priority `todo` item assigned to `claude-code` (then earliest deadline, then lowest id), sets it `in_progress`, implements it on `claude/task-<id>-<slug>` from `main`, runs typecheck / test:db / test:mcp / build, commits (no push or merge), adds a report note (what was built, branch and commit, how to test, what needs the user), and sets the status to `review`. If the spec is unclear or the checks keep failing, it adds a note and sets the status to `blocked` instead. If nothing is queued, it says so and stops.
+3. Review the branch, then mark the item done (or add a note and set it back to `todo`).
+
+Data/UI: `assignee` field and filter (Tasks page), `review` status, append-only notes in the detail panel; MCP `add_note` / `list_notes` and `assignee` on create/update/list.
 
 ### Phase 2 — Kanban + timeline views (planned)
 - Kanban board grouped by status, filterable by vision/project, drag to change status
