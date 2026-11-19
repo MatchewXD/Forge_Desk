@@ -1,0 +1,8 @@
+node_modules/
+out/
+dist/
+.vs/
+*.log
+*.db
+*.db-shm
+*.db-wal
