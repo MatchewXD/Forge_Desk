@@ -11,6 +11,9 @@ import {
   openDatabase
 } from '../shared/db/index.ts'
 import { CHANNELS, type IpcResult } from '../preload/api'
+// Multi-size .ico (16-256px) used for the window and taskbar; `?asset` copies it next to the
+// bundled main process so the path works in dev and in a packaged app.
+import appIcon from '../../build/icon.ico?asset'
 
 let db: DatabaseSync
 let repo: TaskRepository
@@ -66,6 +69,7 @@ function createWindow(): void {
     minHeight: 560,
     show: false,
     title: 'Forge Desk',
+    icon: appIcon,
     backgroundColor: '#0f1115',
     autoHideMenuBar: true,
     webPreferences: {

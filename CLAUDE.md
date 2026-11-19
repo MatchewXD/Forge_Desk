@@ -34,7 +34,12 @@ src/
   preload/          contextBridge exposing a typed `window.forge` API
   renderer/         React UI (sidebar, Tasks tree, Today screen, Completed archive, detail panel)
 scripts/            Node scripts (e.g. db-smoke.ts) run directly with Node's type stripping
+build/              App icon: icon-source.png (original art), icon.png (1024, transparent corners),
+                    icon.ico (16/24/32/48/64/128/256). Also electron-builder's buildResources dir.
+electron-builder.yml  Installer config (not yet a dependency) — uses build/icon.ico
 ```
+
+**App icon:** the main process imports `build/icon.ico?asset` (electron-vite copies it into `out/main/chunks`) and passes it as the `BrowserWindow` icon, which Windows also uses for the taskbar. To change the art, replace `build/icon-source.png` and run `python scripts/make-icon.py build/icon-source.png build` (needs Pillow). The script flood-fills the black background from the corners to make it transparent, softens the edge, and writes `icon.png` and the multi-size `icon.ico`.
 
 ## Conventions
 

@@ -1,0 +1,22 @@
+# Packaging config for the (future) Windows installer.
+# electron-builder isn't a dependency yet — when packaging is added:
+#   npm i -D electron-builder
+#   npm run build && npx electron-builder --win
+appId: com.forgedesk.app # must match app.setAppUserModelId() in src/main/index.ts
+productName: Forge Desk
+directories:
+  buildResources: build # icon.ico / icon.png live here
+  output: dist
+files:
+  - out/**
+  - package.json
+win:
+  icon: build/icon.ico
+  target: nsis
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
+  installerHeaderIcon: build/icon.ico
+  shortcutName: Forge Desk
